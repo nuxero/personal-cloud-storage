@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  RetroArch Cloud Saves infrastructure — S3 bucket, IAM user, EC2 instance
+  running rclone WebDAV server with HTTPS.
+
+Parameters:
+  Domain:
+    Type: String
+    Description: Domain name for the WebDAV endpoint (e.g. retroarch.example.com)
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 key pair for SSH access
+
+  SshCidr:
+    Type: String
+    Default: '0.0.0.0/0'
+    Description: CIDR block allowed to SSH (recommend your IP/32)
+
+  InstanceType:
+    Type: String
+    Default: t4g.nano
+    AllowedValues:
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
+    Description: EC2 instance type (ARM64 Graviton)
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 ARM64 AMI
+
+Resources:
+  # --- S3 Bucket ---
+  SavesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'retroarch-saves-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # --- IAM User for rclone on EC2 ---
+  SyncUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: retroarch-sync
+      Policies:
+        - PolicyName: retroarch-s3-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt SavesBucket.Arn
+                  - !Sub '${SavesBucket.Arn}/*'
+
+  SyncUserAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref SyncUser
+
+  # --- Networking ---
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RetroArch WebDAV server
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: HTTPS WebDAV from anywhere
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: HTTP for Let's Encrypt challenge (remove after setup)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+          Description: SSH access
+      Tags:
+        - Key: Name
+          Value: retroarch-webdav
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: retroarch-webdav
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # --- EC2 Instance ---
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: retroarch-webdav
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            Encrypted: true
+
+Outputs:
+  BucketName:
+    Description: S3 bucket for saves
+    Value: !Ref SavesBucket
+
+  ElasticIp:
+    Description: Public IP address — point your DNS A record here
+    Value: !Ref ElasticIp
+
+  WebDavUrl:
+    Description: WebDAV URL for RetroArch
+    Value: !Sub 'https://${Domain}/'
+
+  InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref Instance
+
+  AccessKeyId:
+    Description: IAM access key for rclone (use in setup script)
+    Value: !Ref SyncUserAccessKey
+
+  SecretAccessKey:
+    Description: IAM secret key for rclone (use in setup script)
+    Value: !GetAtt SyncUserAccessKey.SecretAccessKey
+
+  SshCommand:
+    Description: SSH into the instance
+    Value: !Sub 'ssh -i ${KeyPairName}.pem ec2-user@${ElasticIp}'
+
+  SetupCommand:
+    Description: Run this on the instance after SSH
+    Value: !Sub './setup-server.sh ${Domain}'
