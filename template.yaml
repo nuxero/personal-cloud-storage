@@ -1,16 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  RetroArch Cloud Saves infrastructure — S3 bucket, IAM user, EC2 instance
-  running rclone WebDAV server with HTTPS.
+  RetroArch Cloud Saves — EC2 infrastructure with S3, auto-recovery, and alerting.
 
 Parameters:
-  Domain:
-    Type: String
-    Description: Domain name for the WebDAV endpoint (e.g. retroarch.example.com)
-
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: EC2 key pair for SSH access
+
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Email for alarm notifications (leave empty to skip)
 
   SshCidr:
     Type: String
@@ -24,15 +24,16 @@ Parameters:
       - t4g.nano
       - t4g.micro
       - t4g.small
-    Description: EC2 instance type (ARM64 Graviton)
 
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
-    Description: Amazon Linux 2023 ARM64 AMI
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
 
 Resources:
-  # --- S3 Bucket ---
+  # --- S3 ---
   SavesBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -57,13 +58,19 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
-  # --- IAM User for rclone on EC2 ---
-  SyncUser:
-    Type: AWS::IAM::User
+  # --- IAM ---
+  InstanceRole:
+    Type: AWS::IAM::Role
     Properties:
-      UserName: retroarch-sync
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
       Policies:
-        - PolicyName: retroarch-s3-access
+        - PolicyName: s3-access
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -77,10 +84,11 @@ Resources:
                   - !GetAtt SavesBucket.Arn
                   - !Sub '${SavesBucket.Arn}/*'
 
-  SyncUserAccessKey:
-    Type: AWS::IAM::AccessKey
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
     Properties:
-      UserName: !Ref SyncUser
+      Roles:
+        - !Ref InstanceRole
 
   # --- Networking ---
   SecurityGroup:
@@ -92,12 +100,12 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: '0.0.0.0/0'
-          Description: HTTPS WebDAV from anywhere
+          Description: HTTPS WebDAV
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: '0.0.0.0/0'
-          Description: HTTP for Let's Encrypt challenge (remove after setup)
+          Description: HTTP for ACME certificate challenges
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
@@ -121,13 +129,14 @@ Resources:
       AllocationId: !GetAtt ElasticIp.AllocationId
       InstanceId: !Ref Instance
 
-  # --- EC2 Instance ---
+  # --- EC2 ---
   Instance:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref InstanceProfile
       SecurityGroups:
         - !Ref SecurityGroup
       Tags:
@@ -140,35 +149,73 @@ Resources:
             VolumeType: gp3
             Encrypted: true
 
-Outputs:
-  BucketName:
-    Description: S3 bucket for saves
-    Value: !Ref SavesBucket
+  # --- Alarms ---
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      TopicName: retroarch-webdav-alarms
 
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # Auto-recover on hardware failure
+  RecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: retroarch-webdav-recovery
+      AlarmDescription: Auto-recovers the instance on system status check failure
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub 'arn:aws:automate:${AWS::Region}:ec2:recover'
+        - !If [HasAlertEmail, !Ref AlarmTopic, !Ref 'AWS::NoValue']
+
+  # Alert if instance is down (status check covers both instance and system)
+  InstanceDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: retroarch-webdav-down
+      AlarmDescription: Instance failing status checks for 5+ minutes
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !If [HasAlertEmail, !Ref AlarmTopic, !Ref 'AWS::NoValue']
+
+Outputs:
   ElasticIp:
-    Description: Public IP address — point your DNS A record here
+    Description: Point your DNS A record here
     Value: !Ref ElasticIp
 
-  WebDavUrl:
-    Description: WebDAV URL for RetroArch
-    Value: !Sub 'https://${Domain}/'
-
-  InstanceId:
-    Description: EC2 instance ID
-    Value: !Ref Instance
-
-  AccessKeyId:
-    Description: IAM access key for rclone (use in setup script)
-    Value: !Ref SyncUserAccessKey
-
-  SecretAccessKey:
-    Description: IAM secret key for rclone (use in setup script)
-    Value: !GetAtt SyncUserAccessKey.SecretAccessKey
+  BucketName:
+    Description: S3 bucket name (used by setup.sh)
+    Value: !Ref SavesBucket
 
   SshCommand:
     Description: SSH into the instance
     Value: !Sub 'ssh -i ${KeyPairName}.pem ec2-user@${ElasticIp}'
 
   SetupCommand:
-    Description: Run this on the instance after SSH
-    Value: !Sub './setup-server.sh ${Domain}'
+    Description: Run after SSH
+    Value: !Sub 'sudo ./setup.sh --domain YOURDOMAIN --bucket ${SavesBucket} --region ${AWS::Region}'
