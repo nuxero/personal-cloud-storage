@@ -136,7 +136,7 @@ ExecStart=${RCLONE_BIN} serve webdav s3-saves:${BUCKET} \\
   --cert ${CERT_PATH} \\
   --key ${KEY_PATH} \\
   --htpasswd /home/ec2-user/htpasswd \\
-  --vfs-cache-mode writes \\
+  --vfs-cache-mode minimal \\
   --vfs-cache-max-age 1h \\
   --min-tls-version tls1.2 \\
   --server-read-timeout 5m \\

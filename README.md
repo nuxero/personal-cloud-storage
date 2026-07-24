@@ -1,20 +1,36 @@
-# retroarch-saves
+# personal-cloud-storage
 
-Sync RetroArch save files across devices using S3 + WebDAV.
+Personal cloud storage server using S3 + WebDAV. Serves multiple use cases (game saves, backups, media) from a single endpoint with logical separation via path prefixes.
 
 ## Architecture
 
 ```
 ┌─────────────┐                        ┌──────────────────┐                 ┌─────────────┐
-│   Devices   │───── HTTPS/WebDAV ────►│  EC2 (t4g.nano)  │──── S3 API ───►│  S3 Bucket  │
+│   Clients   │───── HTTPS/WebDAV ────►│  EC2 (t4g.nano)  │──── S3 API ───►│  S3 Bucket  │
 │             │                        │  rclone serve    │                 │  (versioned)│
-│ • Laptop    │◄── saves/states sync ──│  webdav          │◄── read/write ──│             │
-│ • Phone     │                        └──────────────────┘                 └─────────────┘
-│ • Handheld  │
+│ • RetroArch │◄──── read/write ───────│  webdav          │◄── read/write ──│             │
+│ • Backup    │                        └──────────────────┘                 └─────────────┘
+│ • Media     │
 └─────────────┘
 ```
 
 **Cost:** ~$3/month (EC2) + pennies (S3).
+
+## Storage layout
+
+Each use case gets its own prefix in the bucket:
+
+```
+s3:bucket/
+├── retroarch/   ← game saves and states
+├── backups/     ← cold backups (databases, configs, etc.)
+└── media/       ← photos, music, videos
+```
+
+Clients target their respective path on the WebDAV endpoint:
+- `https://storage.yourdomain.com/retroarch/`
+- `https://storage.yourdomain.com/backups/`
+- `https://storage.yourdomain.com/media/`
 
 ## Prerequisites
 
@@ -46,17 +62,17 @@ aws cloudformation describe-stacks --stack-name retroarch-saves \
   --query 'Stacks[0].Outputs' --output table
 ```
 
-Create an A record at your DNS provider: `saves.yourdomain.com → <ElasticIp>`
+Create an A record at your DNS provider: `storage.yourdomain.com → <ElasticIp>`
 
 ### 3. Configure the server
 
 ```bash
 # Copy setup script and SSH in
-scp -i your-key.pem setup.sh ec2-user@ELASTIC_IP:~
+scp -i your-key.pem setup-server.sh ec2-user@ELASTIC_IP:~
 ssh -i your-key.pem ec2-user@ELASTIC_IP
 
 # Run it (use bucket and region from stack outputs)
-sudo ./setup.sh --domain saves.yourdomain.com --bucket retroarch-saves-ACCOUNTID --region us-east-1
+sudo ./setup-server.sh --domain storage.yourdomain.com --bucket retroarch-saves-ACCOUNTID --region us-east-1
 ```
 
 The script prompts for a WebDAV password, then installs rclone, gets a TLS cert, and starts serving. Takes about 2 minutes.
@@ -79,7 +95,7 @@ The script prompts for a WebDAV password, then installs rclone, gets a TLS cert,
 |---------|-------|
 | Cloud Sync | ON |
 | Backend | WebDAV |
-| URL | `https://saves.yourdomain.com/` |
+| URL | `https://storage.yourdomain.com/retroarch/` |
 | Username | `retroarch` |
 | Password | (as entered during setup) |
 | Sync Saves | ON |
@@ -88,6 +104,107 @@ The script prompts for a WebDAV password, then installs rclone, gets a TLS cert,
 All devices must match:
 - Sort Saves into Folders by Core Name → **ON**
 - Sort Save States into Folders by Core Name → **ON**
+
+## Other clients
+
+Any WebDAV-compatible tool can write to the other prefixes using the same credentials:
+
+```bash
+# Example: push a backup with curl
+curl -T database.sql.gz -u retroarch:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
+
+# Example: rclone from another machine
+rclone copy ./photos remote:media/ --webdav-url="https://storage.yourdomain.com" --webdav-user=retroarch --webdav-pass=PASSWORD
+```
+
+## Notes on data safety
+
+- The EC2 instance is **stateless** — it's just a WebDAV-to-S3 proxy. You can terminate and recreate it at any time.
+- **S3 versioning** retains previous versions for 30 days, protecting against accidental deletion or overwrites.
+- The instance role cannot delete object versions (`s3:DeleteObjectVersion` is not granted), so even a compromised server can't permanently destroy data within the retention window.
+- **Encryption:** objects are encrypted at rest with AES-256 (SSE-S3). For sensitive backups, consider client-side encryption (e.g., `restic`, `duplicity`) before uploading.
+
+## Maintenance
+
+### Rotate WebDAV password
+
+```bash
+ssh -i your-key.pem ec2-user@ELASTIC_IP
+
+# Generate new htpasswd
+sudo htpasswd -Bb /home/ec2-user/htpasswd retroarch NEW_PASSWORD
+
+# Restart to pick up the change
+sudo systemctl restart rclone-webdav
+```
+
+Then update the password on all clients (RetroArch, backup scripts, etc.).
+
+### Rotate SSH key pair
+
+1. Create a new key pair in the AWS console
+2. Add the new public key to `~/.ssh/authorized_keys` on the instance
+3. Verify you can SSH with the new key
+4. Remove the old key from `authorized_keys`
+5. Delete the old key pair from AWS console
+
+### Check disk usage
+
+The 8GB EBS volume holds the OS, rclone VFS cache, and certbot state. It shouldn't fill up, but worth checking occasionally:
+
+```bash
+df -h /
+sudo du -sh /home/ec2-user/.cache/rclone
+```
+
+### Review S3 storage and costs
+
+```bash
+# Total size of each prefix
+sudo -u ec2-user rclone size s3-saves:BUCKET/retroarch
+sudo -u ec2-user rclone size s3-saves:BUCKET/backups
+sudo -u ec2-user rclone size s3-saves:BUCKET/media
+```
+
+Or check the S3 bucket metrics in the AWS console under CloudWatch → Storage Metrics.
+
+### Verify TLS certificate renewal
+
+Certbot auto-renews via a systemd timer, but you can confirm it's working:
+
+```bash
+sudo systemctl list-timers certbot-renew.timer
+sudo certbot certificates
+```
+
+### Update rclone
+
+```bash
+sudo curl -fsSL https://rclone.org/install.sh | sudo bash
+sudo systemctl restart rclone-webdav
+```
+
+### OS patches
+
+`dnf-automatic` applies security patches automatically. To manually check or force a full update:
+
+```bash
+sudo dnf check-update
+sudo dnf upgrade -y
+sudo reboot  # if kernel was updated
+```
+
+### Recommended cadence
+
+| Task | Frequency |
+|------|-----------|
+| Rotate WebDAV password | Every 6–12 months |
+| Rotate SSH key pair | Annually or if compromised |
+| Check disk usage | Every few months |
+| Review S3 costs | Monthly (check AWS billing) |
+| Verify TLS cert | After any instance recovery |
+| Update rclone | Every few months or when needed |
+| OS patches | Automatic (verify after recovery) |
 
 ## Troubleshooting
 
