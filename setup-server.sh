@@ -1,11 +1,13 @@
 #!/bin/bash
 # setup-server.sh
 # Configures an EC2 instance (Amazon Linux 2023 / ARM64) as a secure
-# rclone WebDAV server backed by S3 for RetroArch cloud saves.
+# WebDAV server backed by S3 for personal cloud storage.
+#
+# Architecture: Caddy (TLS + auth) → rclone (WebDAV → S3)
 #
 # Usage:
-#   sudo ./setup-server.sh --domain saves.example.com \
-#     --bucket retroarch-saves-123456 --region us-east-1
+#   sudo ./setup-server.sh --domain storage.example.com \
+#     --bucket my-bucket-123456 --region us-east-1
 #
 # Prerequisites:
 #   - Fresh AL2023 instance launched via template.yaml
@@ -51,7 +53,7 @@ if [[ -z "$WEBDAV_PASS" ]]; then
   fi
 fi
 
-echo "=== RetroArch WebDAV Server Setup ==="
+echo "=== Personal Cloud Storage Server Setup ==="
 echo "  Domain: $DOMAIN"
 echo "  Bucket: $BUCKET"
 echo "  Region: $REGION"
@@ -59,19 +61,64 @@ echo "  User:   $WEBDAV_USER"
 echo ""
 
 # --- Install dependencies ---
-echo "[1/6] Installing packages..."
-dnf install -y unzip httpd-tools certbot fail2ban dnf-automatic
+echo "[1/5] Installing packages..."
+dnf install -y unzip fail2ban dnf-automatic
 
 # --- Install rclone ---
-echo "[2/6] Installing rclone..."
+echo "[2/5] Installing rclone..."
 if ! command -v rclone &>/dev/null; then
   curl -fsSL https://rclone.org/install.sh | bash
 fi
 RCLONE_BIN=$(command -v rclone)
 echo "  $(rclone --version | head -1) (${RCLONE_BIN})"
 
+# --- Install Caddy ---
+echo "[3/5] Installing Caddy..."
+if ! command -v caddy &>/dev/null; then
+  CADDY_VERSION=$(curl -s https://api.github.com/repos/caddyserver/caddy/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+  CADDY_URL="https://github.com/caddyserver/caddy/releases/download/${CADDY_VERSION}/caddy_${CADDY_VERSION#v}_linux_arm64.tar.gz"
+  echo "  Downloading Caddy ${CADDY_VERSION}..."
+  curl -fsSL "$CADDY_URL" -o /tmp/caddy.tar.gz
+  tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+  chmod +x /usr/local/bin/caddy
+  rm -f /tmp/caddy.tar.gz
+
+  # Create caddy user and group
+  groupadd --system caddy 2>/dev/null || true
+  useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
+
+  # Create systemd service
+  cat > /etc/systemd/system/caddy.service << 'CADDYSVC'
+[Unit]
+Description=Caddy web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+CADDYSVC
+
+  mkdir -p /etc/caddy
+  mkdir -p /var/lib/caddy/.local/share/caddy
+  chown -R caddy:caddy /var/lib/caddy
+  systemctl daemon-reload
+fi
+echo "  $(caddy version)"
+
 # --- Configure rclone (uses IAM instance role — no access keys) ---
-echo "[3/6] Configuring rclone..."
+echo "[4/5] Configuring rclone + Caddy..."
 mkdir -p /home/ec2-user/.config/rclone
 cat > /home/ec2-user/.config/rclone/rclone.conf << EOF
 [s3-saves]
@@ -88,43 +135,23 @@ sudo -u ec2-user rclone lsd "s3-saves:${BUCKET}" &>/dev/null \
   && echo "  S3 bucket accessible" \
   || echo "  S3 bucket accessible (empty)"
 
-# --- Create htpasswd ---
-htpasswd -Bbc /home/ec2-user/htpasswd "$WEBDAV_USER" "$WEBDAV_PASS"
-chown ec2-user:ec2-user /home/ec2-user/htpasswd
-chmod 600 /home/ec2-user/htpasswd
-echo "  htpasswd created (bcrypt)"
+# --- Generate bcrypt hash for Caddy basicauth ---
+PASS_HASH=$(caddy hash-password --plaintext "$WEBDAV_PASS")
 
-# --- TLS certificate ---
-echo "[4/6] Obtaining TLS certificate..."
-certbot certonly \
-  --standalone \
-  --non-interactive \
-  --agree-tos \
-  --email "admin@${DOMAIN}" \
-  -d "$DOMAIN"
+# --- Caddyfile ---
+cat > /etc/caddy/Caddyfile << EOF
+${DOMAIN} {
+    basicauth {
+        ${WEBDAV_USER} ${PASS_HASH}
+    }
+    reverse_proxy localhost:8080
+}
+EOF
 
-CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
-
-if [[ ! -f "$CERT_PATH" ]]; then
-  echo "ERROR: Certificate not found at $CERT_PATH"
-  echo "Ensure DNS A record points to this instance's Elastic IP."
-  exit 1
-fi
-
-chmod 755 /etc/letsencrypt/live/
-chmod 755 /etc/letsencrypt/archive/
-chmod 644 "/etc/letsencrypt/archive/${DOMAIN}/"fullchain*.pem
-chmod 640 "/etc/letsencrypt/archive/${DOMAIN}/"privkey*.pem
-chgrp ec2-user "/etc/letsencrypt/archive/${DOMAIN}/"privkey*.pem
-echo "  Certificate obtained"
-
-# --- Systemd services ---
-echo "[5/6] Creating services..."
-
+# --- rclone systemd service (no TLS, no auth — Caddy handles both) ---
 cat > /etc/systemd/system/rclone-webdav.service << EOF
 [Unit]
-Description=rclone WebDAV server for RetroArch cloud saves
+Description=rclone WebDAV server (S3 backend)
 After=network-online.target
 Wants=network-online.target
 
@@ -132,18 +159,13 @@ Wants=network-online.target
 Type=simple
 User=ec2-user
 ExecStart=${RCLONE_BIN} serve webdav s3-saves:${BUCKET} \\
-  --addr :443 \\
-  --cert ${CERT_PATH} \\
-  --key ${KEY_PATH} \\
-  --htpasswd /home/ec2-user/htpasswd \\
+  --addr 127.0.0.1:8080 \\
   --vfs-cache-mode minimal \\
   --vfs-cache-max-age 1h \\
-  --min-tls-version tls1.2 \\
   --server-read-timeout 5m \\
   --server-write-timeout 5m
 Restart=always
 RestartSec=5
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -157,66 +179,8 @@ EOF
 mkdir -p /home/ec2-user/.cache/rclone
 chown ec2-user:ec2-user /home/ec2-user/.cache/rclone
 
-# Cert renewal
-cat > /etc/systemd/system/certbot-renew.service << 'EOF'
-[Unit]
-Description=Certbot renewal
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/certbot renew --quiet --deploy-hook "systemctl restart rclone-webdav"
-EOF
-
-cat > /etc/systemd/system/certbot-renew.timer << 'EOF'
-[Unit]
-Description=Certbot renewal timer
-
-[Timer]
-OnCalendar=*-*-* 03:00:00
-RandomizedDelaySec=3600
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# Health check — restarts rclone if unresponsive
-cat > /usr/local/bin/webdav-healthcheck.sh << HEALTHEOF
-#!/bin/bash
-if ! systemctl is-active --quiet rclone-webdav; then
-  systemctl restart rclone-webdav
-  exit 0
-fi
-HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -u "${WEBDAV_USER}:${WEBDAV_PASS}" "https://localhost/" -k 2>/dev/null)
-if [[ "\$HTTP_CODE" != "200" && "\$HTTP_CODE" != "207" ]]; then
-  systemctl restart rclone-webdav
-fi
-HEALTHEOF
-chmod 700 /usr/local/bin/webdav-healthcheck.sh
-
-cat > /etc/systemd/system/webdav-healthcheck.service << 'EOF'
-[Unit]
-Description=WebDAV health check
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/webdav-healthcheck.sh
-EOF
-
-cat > /etc/systemd/system/webdav-healthcheck.timer << 'EOF'
-[Unit]
-Description=WebDAV health check (every 5 min)
-
-[Timer]
-OnCalendar=*:0/5
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
 # --- Hardening + auto-updates ---
-echo "[6/6] Hardening..."
+echo "[5/5] Hardening..."
 systemctl enable --now fail2ban
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
@@ -224,11 +188,10 @@ systemctl enable --now dnf-automatic-install.timer
 # --- Start everything ---
 systemctl daemon-reload
 systemctl enable --now rclone-webdav
-systemctl enable --now certbot-renew.timer
-systemctl enable --now webdav-healthcheck.timer
+systemctl enable --now caddy
 
-sleep 2
-if systemctl is-active --quiet rclone-webdav; then
+sleep 3
+if systemctl is-active --quiet rclone-webdav && systemctl is-active --quiet caddy; then
   echo ""
   echo "=========================================="
   echo "  SETUP COMPLETE"
@@ -237,19 +200,22 @@ if systemctl is-active --quiet rclone-webdav; then
   echo "  Endpoint: https://${DOMAIN}/"
   echo "  Username: ${WEBDAV_USER}"
   echo ""
-  echo "  RetroArch Cloud Sync settings:"
-  echo "    Backend:  WebDAV"
-  echo "    URL:      https://${DOMAIN}/"
-  echo "    Username: ${WEBDAV_USER}"
-  echo "    Password: (as entered)"
+  echo "  Storage prefixes:"
+  echo "    https://${DOMAIN}/retroarch/  ← game saves"
+  echo "    https://${DOMAIN}/backups/    ← cold backups"
+  echo "    https://${DOMAIN}/media/      ← photos, music, videos"
   echo ""
   echo "  Commands:"
+  echo "    sudo systemctl status caddy"
   echo "    sudo systemctl status rclone-webdav"
   echo "    sudo journalctl -u rclone-webdav -f"
+  echo "    sudo journalctl -u caddy -f"
   echo "    sudo -u ec2-user rclone ls s3-saves:${BUCKET}"
   echo "=========================================="
 else
-  echo "ERROR: Service failed to start."
-  echo "Check: sudo journalctl -u rclone-webdav -n 20"
+  echo "ERROR: Service(s) failed to start."
+  echo "Check:"
+  echo "  sudo journalctl -u rclone-webdav -n 20"
+  echo "  sudo journalctl -u caddy -n 20"
   exit 1
 fi

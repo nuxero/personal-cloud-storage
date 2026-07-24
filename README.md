@@ -5,14 +5,18 @@ Personal cloud storage server using S3 + WebDAV. Serves multiple use cases (game
 ## Architecture
 
 ```
-┌─────────────┐                        ┌──────────────────┐                 ┌─────────────┐
-│   Clients   │───── HTTPS/WebDAV ────►│  EC2 (t4g.nano)  │──── S3 API ───►│  S3 Bucket  │
-│             │                        │  rclone serve    │                 │  (versioned)│
-│ • RetroArch │◄──── read/write ───────│  webdav          │◄── read/write ──│             │
-│ • Backup    │                        └──────────────────┘                 └─────────────┘
-│ • Media     │
-└─────────────┘
+┌─────────────┐          ┌────────────────────────────────────┐          ┌─────────────┐
+│   Clients   │── HTTPS ►│         EC2 (t4g.nano)             │── S3 ───►│  S3 Bucket  │
+│             │          │  ┌───────┐       ┌──────────────┐  │          │  (versioned)│
+│ • RetroArch │◄─────────│  │ Caddy │──────►│ rclone serve │  │◄─────────│             │
+│ • Backup    │          │  │ :443  │ proxy │ webdav :8080 │  │          └─────────────┘
+│ • Media     │          │  │ TLS+  │       │ (localhost)  │  │
+│ • Dolphin   │          │  │ Auth  │       └──────────────┘  │
+└─────────────┘          │  └───────┘                         │
+                         └────────────────────────────────────┘
 ```
+
+Caddy handles TLS (auto Let's Encrypt) and authentication. rclone bridges WebDAV to S3.
 
 **Cost:** ~$3/month (EC2) + pennies (S3).
 
@@ -81,11 +85,10 @@ The script prompts for a WebDAV password, then installs rclone, gets a TLS cert,
 
 | Concern | How |
 |---------|-----|
-| Service crashes | systemd `Restart=always` |
-| Service unresponsive | Health check every 5 min, auto-restarts |
+| Service crashes | systemd `Restart=always` (both Caddy and rclone) |
 | Hardware failure | CloudWatch auto-recovery (migrates instance) |
 | Instance down 5+ min | Email alert |
-| TLS cert expiry | Auto-renewed daily via certbot timer |
+| TLS cert expiry | Caddy auto-renews via built-in ACME client |
 | OS vulnerabilities | `dnf-automatic` applies security patches |
 | SSH brute force | fail2ban |
 
@@ -110,12 +113,42 @@ All devices must match:
 Any WebDAV-compatible tool can write to the other prefixes using the same credentials:
 
 ```bash
-# Example: push a backup with curl
-curl -T database.sql.gz -u retroarch:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
+# Set up an rclone remote (recommended for bulk/large uploads)
+rclone config create saves webdav url=https://storage.yourdomain.com user=retroarch pass=$(rclone obscure 'YOUR_PASSWORD')
 
-# Example: rclone from another machine
-rclone copy ./photos remote:media/ --webdav-url="https://storage.yourdomain.com" --webdav-user=retroarch --webdav-pass=PASSWORD
+# Upload files
+rclone copy ./photos saves:media/photos/ --progress
+
+# Push a backup with curl
+curl -T database.sql.gz -u retroarch:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
 ```
+
+### KDE Dolphin / KIO (known limitation)
+
+KIO's WebDAV worker (used by Dolphin, kioclient, etc.) has a bug with HTTP/2 uploads: it drops the last ~983KB of files larger than ~500KB, resulting in **silently corrupted uploads**. The server reports a 502 error but KIO may still show the file as copied.
+
+**Affected:** large file uploads via Dolphin, kioclient, or any KIO-based app.
+
+**Not affected:** browsing, downloading, deleting, small file uploads.
+
+**Workaround:** use `rclone copy` or `curl -T` for uploading files larger than ~500KB. Dolphin is fine for browsing and downloading.
+
+```bash
+# Browse in Dolphin (address bar):
+webdavs://storage.yourdomain.com/
+
+# Upload large files via rclone:
+rclone copy "/path/to/files/" saves:"backups/folder/" --progress
+```
+
+### Recommended client setup
+
+| Platform | Browsing | Uploading large files |
+|----------|----------|----------------------|
+| Linux (KDE) | Dolphin (`webdavs://...`) | `rclone copy` |
+| Linux (GNOME) | Nautilus (`davs://...`) | `rclone copy` |
+| Android | WebDAV Provider (SAF) | FolderSync |
+| Any | — | `curl -T` or `rclone copy` |
 
 ## Notes on data safety
 
@@ -131,11 +164,14 @@ rclone copy ./photos remote:media/ --webdav-url="https://storage.yourdomain.com"
 ```bash
 ssh -i your-key.pem ec2-user@ELASTIC_IP
 
-# Generate new htpasswd
-sudo htpasswd -Bb /home/ec2-user/htpasswd retroarch NEW_PASSWORD
+# Generate new hash
+caddy hash-password --plaintext 'NEW_PASSWORD'
 
-# Restart to pick up the change
-sudo systemctl restart rclone-webdav
+# Edit /etc/caddy/Caddyfile — replace the old hash with the new one
+sudo vim /etc/caddy/Caddyfile
+
+# Reload Caddy (no downtime)
+sudo systemctl reload caddy
 ```
 
 Then update the password on all clients (RetroArch, backup scripts, etc.).
@@ -150,7 +186,7 @@ Then update the password on all clients (RetroArch, backup scripts, etc.).
 
 ### Check disk usage
 
-The 8GB EBS volume holds the OS, rclone VFS cache, and certbot state. It shouldn't fill up, but worth checking occasionally:
+The 8GB EBS volume holds the OS and rclone VFS cache. It shouldn't fill up, but worth checking occasionally:
 
 ```bash
 df -h /
@@ -170,11 +206,11 @@ Or check the S3 bucket metrics in the AWS console under CloudWatch → Storage M
 
 ### Verify TLS certificate renewal
 
-Certbot auto-renews via a systemd timer, but you can confirm it's working:
+Caddy auto-renews certificates. To confirm:
 
 ```bash
-sudo systemctl list-timers certbot-renew.timer
-sudo certbot certificates
+sudo caddy list-certs
+sudo journalctl -u caddy --grep="certificate\|tls" --since "7 days ago"
 ```
 
 ### Update rclone
@@ -204,6 +240,7 @@ sudo reboot  # if kernel was updated
 | Review S3 costs | Monthly (check AWS billing) |
 | Verify TLS cert | After any instance recovery |
 | Update rclone | Every few months or when needed |
+| Update Caddy | Every few months (re-download from GitHub releases) |
 | OS patches | Automatic (verify after recovery) |
 
 ## Troubleshooting
@@ -211,8 +248,10 @@ sudo reboot  # if kernel was updated
 ```bash
 ssh -i your-key.pem ec2-user@ELASTIC_IP
 
-sudo systemctl status rclone-webdav        # Service status
-sudo journalctl -u rclone-webdav -f        # Live logs
+sudo systemctl status caddy              # Caddy (TLS + auth)
+sudo systemctl status rclone-webdav      # rclone (WebDAV → S3)
+sudo journalctl -u caddy -f             # Caddy logs
+sudo journalctl -u rclone-webdav -f      # rclone logs
 sudo -u ec2-user rclone ls s3-saves:BUCKET # List synced files
 ```
 
