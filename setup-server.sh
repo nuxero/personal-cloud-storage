@@ -151,7 +151,7 @@ ${DOMAIN} {
             roll_keep_for 14d
         }
     }
-    basicauth {
+    basic_auth {
         ${WEBDAV_USER} ${PASS_HASH}
     }
     reverse_proxy localhost:8080
@@ -194,12 +194,15 @@ echo "[5/5] Hardening..."
 
 # fail2ban filter: Caddy authentication failures (401)
 cat > /etc/fail2ban/filter.d/caddy-auth.conf << 'FILTEREOF'
-# fail2ban filter for Caddy basicauth brute-force attempts.
+# fail2ban filter for Caddy basic_auth brute-force attempts.
 # Matches JSON access log lines where status is 401 (Unauthorized).
+# Requires fail2ban v0.11.0+ for Epoch datepattern support.
 
 [Definition]
 
-failregex = ^\{.*"remote_ip":"<HOST>".*"status":401[,\}]
+failregex = "remote_ip":"<HOST>".*"status":401
+
+datepattern = "ts":{Epoch}
 
 ignoreregex =
 FILTEREOF
@@ -208,28 +211,32 @@ FILTEREOF
 cat > /etc/fail2ban/filter.d/caddy-botscan.conf << 'FILTEREOF'
 # fail2ban filter for aggressive path scanning / vulnerability probes.
 # Matches JSON access log lines where status is 404 (Not Found).
+# Requires fail2ban v0.11.0+ for Epoch datepattern support.
 
 [Definition]
 
-failregex = ^\{.*"remote_ip":"<HOST>".*"status":404[,\}]
+failregex = "remote_ip":"<HOST>".*"status":404
+
+datepattern = "ts":{Epoch}
 
 ignoreregex =
 FILTEREOF
 
-# fail2ban jail configuration
-cat > /etc/fail2ban/jail.d/webdav.conf << 'JAILEOF'
-# Jails for the Caddy WebDAV server.
-
+# fail2ban jail configuration — separate files so one failure doesn't break others
+cat > /etc/fail2ban/jail.d/sshd.conf << 'JAILEOF'
+# SSH brute-force protection (tighter than defaults).
+# Uses systemd backend because AL2023 logs sshd to journald.
 [sshd]
 enabled  = true
 port     = ssh
 filter   = sshd
-logpath  = /var/log/secure
 maxretry = 5
 findtime = 600
 bantime  = 3600
-backend  = auto
+backend  = systemd
+JAILEOF
 
+cat > /etc/fail2ban/jail.d/caddy.conf << 'JAILEOF'
 # Ban IP after 5 failed login attempts within 10 minutes (1 hour ban).
 [caddy-auth]
 enabled  = true
@@ -252,6 +259,10 @@ findtime = 300
 bantime  = 3600
 backend  = auto
 JAILEOF
+
+# Create empty access log so fail2ban can start before first request arrives
+touch /var/log/caddy/access.log
+chown caddy:caddy /var/log/caddy/access.log
 
 systemctl enable --now fail2ban
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
