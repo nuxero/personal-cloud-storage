@@ -16,7 +16,7 @@ Personal cloud storage server using S3 + WebDAV, managed declaratively with NixO
                          └────────────────────────────────────┘
 ```
 
-**OS:** NixOS 25.05 (stable) — entire server configuration is declarative and reproducible.
+**OS:** NixOS 26.05 (stable) — entire server configuration is declarative and reproducible.
 
 **Cost:** ~$3/month (EC2) + pennies (S3).
 
@@ -75,7 +75,7 @@ aws cloudformation deploy \
 |--------|-------|
 | [NixOS download page](https://nixos.org/download#nixos-amazon) | Official AMIs by region |
 | [Determinate Systems](https://github.com/DeterminateSystems/nixos-amis) | Optimized AMIs for x86_64 and aarch64 |
-| [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-lomgvizeucgwe) | NixOS 25.05 by Epok Systems |
+| [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-lomgvizeucgwe) | NixOS 26.05 by Epok Systems |
 
 ### Configure the server
 
