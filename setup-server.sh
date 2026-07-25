@@ -151,7 +151,7 @@ ${DOMAIN} {
             roll_keep_for 14d
         }
     }
-    basicauth {
+    basic_auth {
         ${WEBDAV_USER} ${PASS_HASH}
     }
     reverse_proxy localhost:8080
@@ -252,6 +252,10 @@ findtime = 300
 bantime  = 3600
 backend  = auto
 JAILEOF
+
+# Create empty access log so fail2ban can start before first request arrives
+touch /var/log/caddy/access.log
+chown caddy:caddy /var/log/caddy/access.log
 
 systemctl enable --now fail2ban
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf

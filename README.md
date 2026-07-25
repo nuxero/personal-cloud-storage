@@ -123,7 +123,7 @@ storage.yourdomain.com {
     # disposable. If compromised, only game saves are exposed.
     @retroarch path /retroarch/*
     handle @retroarch {
-        basicauth {
+        basic_auth {
             # Generate hash: caddy hash-password --plaintext 'YOUR_RETROARCH_PASSWORD'
             retroarch $2a$14$VmG/ADnFLVkwGmBj8wXOve...
             myuser    $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
@@ -133,7 +133,7 @@ storage.yourdomain.com {
 
     # Everything else — only the primary user can access /backups/*, /media/*, etc.
     handle {
-        basicauth {
+        basic_auth {
             # Generate hash: caddy hash-password --plaintext 'YOUR_MAIN_PASSWORD'
             myuser $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
         }
