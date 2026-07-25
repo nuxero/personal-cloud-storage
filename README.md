@@ -108,19 +108,59 @@ All devices must match:
 - Sort Saves into Folders by Core Name → **ON**
 - Sort Save States into Folders by Core Name → **ON**
 
+### Separate password for RetroArch (recommended)
+
+RetroArch stores WebDAV passwords in plain text (`retroarch.cfg`). To limit exposure, create a dedicated user for RetroArch that can only access the `/retroarch/` path, and keep a separate primary account for everything else.
+
+Example `/etc/caddy/Caddyfile`:
+
+```caddyfile
+storage.yourdomain.com {
+    # RetroArch user — restricted to /retroarch/* only.
+    # This password is stored in plain text by RetroArch, so treat it as
+    # disposable. If compromised, only game saves are exposed.
+    @retroarch path /retroarch/*
+    handle @retroarch {
+        basicauth {
+            # Generate hash: caddy hash-password --plaintext 'YOUR_RETROARCH_PASSWORD'
+            retroarch $2a$14$VmG/ADnFLVkwGmBj8wXOve...
+            myuser    $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
+        }
+        reverse_proxy localhost:8080
+    }
+
+    # Everything else — only the primary user can access /backups/*, /media/*, etc.
+    handle {
+        basicauth {
+            # Generate hash: caddy hash-password --plaintext 'YOUR_MAIN_PASSWORD'
+            myuser $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
+        }
+        reverse_proxy localhost:8080
+    }
+}
+```
+
+After editing, reload without downtime:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Then update RetroArch to use the `retroarch` username and dedicated password. Your other clients (rclone, Dolphin, curl) continue using `myuser` with the stronger primary password.
+
 ## Other clients
 
-Any WebDAV-compatible tool can write to the other prefixes using the same credentials:
+Any WebDAV-compatible tool can write to the other prefixes using the primary credentials:
 
 ```bash
 # Set up an rclone remote (recommended for bulk/large uploads)
-rclone config create saves webdav url=https://storage.yourdomain.com user=retroarch pass=$(rclone obscure 'YOUR_PASSWORD')
+rclone config create saves webdav url=https://storage.yourdomain.com user=myuser pass=$(rclone obscure 'YOUR_MAIN_PASSWORD')
 
 # Upload files
 rclone copy ./photos saves:media/photos/ --progress
 
 # Push a backup with curl
-curl -T database.sql.gz -u retroarch:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
+curl -T database.sql.gz -u myuser:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
 ```
 
 ### KDE Dolphin / KIO (known limitation)
