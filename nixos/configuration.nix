@@ -82,17 +82,16 @@ in
 
     serviceConfig = {
       Type = "simple";
-      ExecStart = ''
-        ${pkgs.rclone}/bin/rclone serve webdav :s3:${secrets.s3Bucket} \
-          --addr 127.0.0.1:8080 \
-          --vfs-cache-mode minimal \
-          --vfs-cache-max-age 1h \
-          --s3-provider AWS \
-          --s3-region ${secrets.s3Region} \
-          --s3-env-auth \
-          --server-read-timeout 5m \
-          --server-write-timeout 5m
-      '';
+      ExecStart = lib.concatStringsSep " " [
+        "${pkgs.rclone}/bin/rclone serve webdav"
+        ":s3,provider=AWS,region=${secrets.s3Region},env_auth=true:${secrets.s3Bucket}"
+        "--addr 127.0.0.1:8080"
+        "--vfs-cache-mode minimal"
+        "--vfs-cache-max-age 1h"
+        "--cache-dir /var/cache/rclone"
+        "--server-read-timeout 5m"
+        "--server-write-timeout 5m"
+      ];
       Restart = "always";
       RestartSec = 5;
 
@@ -101,7 +100,7 @@ in
       ProtectSystem = "strict";
       ProtectHome = true;
       PrivateTmp = true;
-      ReadWritePaths = [ "/tmp" ];
+      CacheDirectory = "rclone";
       DynamicUser = true;
     };
   };
