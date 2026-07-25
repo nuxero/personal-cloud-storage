@@ -1,12 +1,12 @@
 # personal-cloud-storage
 
-Personal cloud storage server using S3 + WebDAV. Serves multiple use cases (game saves, backups, media) from a single endpoint with logical separation via path prefixes.
+Personal cloud storage server using S3 + WebDAV, managed declaratively with NixOS. Serves multiple use cases (game saves, backups, media) from a single endpoint with logical separation via path prefixes.
 
 ## Architecture
 
 ```
 ┌─────────────┐          ┌────────────────────────────────────┐          ┌─────────────┐
-│   Clients   │── HTTPS ►│         EC2 (t4g.nano)             │── S3 ───►│  S3 Bucket  │
+│   Clients   │── HTTPS ►│       EC2 (t4g.nano, NixOS)        │── S3 ───►│  S3 Bucket  │
 │             │          │  ┌───────┐       ┌──────────────┐  │          │  (versioned)│
 │ • RetroArch │◄─────────│  │ Caddy │──────►│ rclone serve │  │◄─────────│             │
 │ • Backup    │          │  │ :443  │ proxy │ webdav :8080 │  │          └─────────────┘
@@ -17,6 +17,8 @@ Personal cloud storage server using S3 + WebDAV. Serves multiple use cases (game
 ```
 
 Caddy handles TLS (auto Let's Encrypt) and authentication. rclone bridges WebDAV to S3.
+
+**OS:** NixOS 25.05 (stable) — entire server configuration is declarative and reproducible.
 
 **Cost:** ~$3/month (EC2) + pennies (S3).
 
@@ -41,6 +43,7 @@ Clients target their respective path on the WebDAV endpoint:
 - AWS account with CLI configured
 - An EC2 key pair in your target region
 - A domain name with DNS you control
+- A NixOS AMI ID for your region (see [Finding the AMI](#finding-the-nixos-ami) below)
 
 ## Setup
 
@@ -49,11 +52,12 @@ Clients target their respective path on the WebDAV endpoint:
 ```bash
 aws cloudformation deploy \
   --template-file template.yaml \
-  --stack-name retroarch-saves \
+  --stack-name cloud-storage \
   --parameter-overrides \
     KeyPairName=your-key \
     SshCidr=YOUR_IP/32 \
     AlertEmail=you@example.com \
+    NixOsAmiId=ami-XXXXXXXXXXXXXXXXX \
   --capabilities CAPABILITY_IAM
 ```
 
@@ -62,7 +66,7 @@ aws cloudformation deploy \
 Get the Elastic IP from the stack outputs:
 
 ```bash
-aws cloudformation describe-stacks --stack-name retroarch-saves \
+aws cloudformation describe-stacks --stack-name cloud-storage \
   --query 'Stacks[0].Outputs' --output table
 ```
 
@@ -70,16 +74,72 @@ Create an A record at your DNS provider: `storage.yourdomain.com → <ElasticIp>
 
 ### 3. Configure the server
 
-```bash
-# Copy setup script and SSH in
-scp -i your-key.pem setup-server.sh ec2-user@ELASTIC_IP:~
-ssh -i your-key.pem ec2-user@ELASTIC_IP
+SSH in (NixOS AMIs use `root` on first boot with the EC2 key pair):
 
-# Run it (use bucket and region from stack outputs)
-sudo ./setup-server.sh --domain storage.yourdomain.com --bucket retroarch-saves-ACCOUNTID --region us-east-1
+```bash
+ssh -i your-key.pem root@ELASTIC_IP
 ```
 
-The script prompts for a WebDAV password, then installs rclone, gets a TLS cert, and starts serving. Takes about 2 minutes.
+Copy the configuration files:
+
+```bash
+# From your local machine:
+scp -i your-key.pem nixos/configuration.nix root@ELASTIC_IP:/etc/nixos/configuration.nix
+```
+
+Create the secrets file on the server:
+
+```bash
+# On the server:
+cat > /etc/nixos/secrets.nix << 'EOF'
+{
+  domain = "storage.yourdomain.com";
+  s3Bucket = "retroarch-saves-ACCOUNTID";
+  s3Region = "us-east-1";
+  webdavUser = "retroarch";
+  webdavPasswordHash = "PASTE_HASH_HERE";
+  sshPublicKeys = [
+    "ssh-ed25519 AAAAC3... your-key"
+  ];
+}
+EOF
+```
+
+Generate the password hash:
+
+```bash
+nix-shell -p caddy --run "caddy hash-password --plaintext 'YOUR_PASSWORD'"
+```
+
+Apply the configuration:
+
+```bash
+nixos-rebuild switch
+```
+
+That's it. Caddy, rclone, fail2ban, firewall, auto-upgrades — everything is now running.
+
+### 4. Verify
+
+```bash
+systemctl status caddy
+systemctl status rclone-webdav
+curl -u retroarch:PASSWORD https://storage.yourdomain.com/
+```
+
+## Finding the NixOS AMI
+
+### Option A: Official NixOS AMIs
+
+Check the [NixOS download page](https://nixos.org/download#nixos-amazon) for the latest stable AMI IDs by region.
+
+### Option B: Determinate Systems AMIs (recommended)
+
+[Determinate Systems](https://determinate.systems/blog/nixos-amis/) publishes optimized NixOS AMIs for both x86_64 and aarch64. See their [nixos-amis repo](https://github.com/DeterminateSystems/nixos-amis) for the latest IDs.
+
+### Option C: AWS Marketplace
+
+Search for "NixOS 25.05" in the AWS Marketplace — the [Epok Systems AMI](https://aws.amazon.com/marketplace/pp/prodview-lomgvizeucgwe) is available for arm64.
 
 ## What stays running
 
@@ -89,10 +149,11 @@ The script prompts for a WebDAV password, then installs rclone, gets a TLS cert,
 | Hardware failure | CloudWatch auto-recovery (migrates instance) |
 | Instance down 5+ min | Email alert |
 | TLS cert expiry | Caddy auto-renews via built-in ACME client |
-| OS vulnerabilities | `dnf-automatic` applies security patches |
-| SSH brute force | fail2ban (`sshd` jail) |
+| OS upgrades | NixOS `system.autoUpgrade` (daily at 04:00, auto-reboot) |
+| SSH brute force | fail2ban (built-in NixOS sshd jail) |
 | WebDAV brute force | fail2ban (`caddy-auth` jail) |
 | Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
+| Old Nix generations | Garbage-collected weekly (older than 30 days) |
 
 ## Configure RetroArch
 
@@ -112,75 +173,31 @@ All devices must match:
 
 ### Separate password for RetroArch (recommended)
 
-RetroArch stores WebDAV passwords in plain text (`retroarch.cfg`). To limit exposure, create a dedicated user for RetroArch that can only access the `/retroarch/` path, and keep a separate primary account for everything else.
+RetroArch stores WebDAV passwords in plain text (`retroarch.cfg`). To limit exposure, add a second user to the Caddy `basic_auth` block in `configuration.nix`:
 
-Example `/etc/caddy/Caddyfile`:
-
-```caddyfile
-storage.yourdomain.com {
-    # RetroArch user — restricted to /retroarch/* only.
-    # This password is stored in plain text by RetroArch, so treat it as
-    # disposable. If compromised, only game saves are exposed.
-    @retroarch path /retroarch/*
-    handle @retroarch {
-        basicauth {
-            # Generate hash: caddy hash-password --plaintext 'YOUR_RETROARCH_PASSWORD'
-            retroarch $2a$14$VmG/ADnFLVkwGmBj8wXOve...
-            myuser    $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
-        }
-        reverse_proxy localhost:8080
-    }
-
-    # Everything else — only the primary user can access /backups/*, /media/*, etc.
-    handle {
-        basicauth {
-            # Generate hash: caddy hash-password --plaintext 'YOUR_MAIN_PASSWORD'
-            myuser $2a$14$Uf1Qx0Mnbou73Lqh0gZSxe...
-        }
-        reverse_proxy localhost:8080
-    }
+```nix
+# In services.caddy.virtualHosts.${secrets.domain}.extraConfig:
+basic_auth {
+    ${secrets.webdavUser} ${secrets.webdavPasswordHash}
+    retroarch ${secrets.retroarchPasswordHash}  # weaker, disposable password
 }
 ```
 
-After editing, reload without downtime:
-
-```bash
-sudo systemctl reload caddy
-```
-
-Then update RetroArch to use the `retroarch` username and dedicated password. Your other clients (rclone, Dolphin, curl) continue using `myuser` with the stronger primary password.
+For path-restricted access, use Caddy's `handle` + matcher directives in the `extraConfig`.
 
 ## Other clients
 
-Any WebDAV-compatible tool can write to the other prefixes using the primary credentials:
+Any WebDAV-compatible tool can write to the other prefixes using the same credentials:
 
 ```bash
-# Set up an rclone remote (recommended for bulk/large uploads)
-rclone config create saves webdav url=https://storage.yourdomain.com user=myuser pass=$(rclone obscure 'YOUR_MAIN_PASSWORD')
+# Set up an rclone remote
+rclone config create saves webdav url=https://storage.yourdomain.com user=myuser pass=$(rclone obscure 'YOUR_PASSWORD')
 
 # Upload files
 rclone copy ./photos saves:media/photos/ --progress
 
 # Push a backup with curl
 curl -T database.sql.gz -u myuser:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
-```
-
-### KDE Dolphin / KIO (known limitation)
-
-KIO's WebDAV worker (used by Dolphin, kioclient, etc.) has a bug with HTTP/2 uploads: it drops the last ~983KB of files larger than ~500KB, resulting in **silently corrupted uploads**. The server reports a 502 error but KIO may still show the file as copied.
-
-**Affected:** large file uploads via Dolphin, kioclient, or any KIO-based app.
-
-**Not affected:** browsing, downloading, deleting, small file uploads.
-
-**Workaround:** use `rclone copy` or `curl -T` for uploading files larger than ~500KB. Dolphin is fine for browsing and downloading.
-
-```bash
-# Browse in Dolphin (address bar):
-webdavs://storage.yourdomain.com/
-
-# Upload large files via rclone:
-rclone copy "/path/to/files/" saves:"backups/folder/" --progress
 ```
 
 ### Recommended client setup
@@ -192,159 +209,93 @@ rclone copy "/path/to/files/" saves:"backups/folder/" --progress
 | Android | WebDAV Provider (SAF) | FolderSync |
 | Any | — | `curl -T` or `rclone copy` |
 
+> **KDE Dolphin / KIO note:** KIO has a bug with HTTP/2 uploads — files larger than ~500KB may be silently corrupted. Use `rclone copy` for uploading. Dolphin is fine for browsing and downloading.
+
 ## Notes on data safety
 
 - The EC2 instance is **stateless** — it's just a WebDAV-to-S3 proxy. You can terminate and recreate it at any time.
 - **S3 versioning** retains previous versions for 30 days, protecting against accidental deletion or overwrites.
 - The instance role cannot delete object versions (`s3:DeleteObjectVersion` is not granted), so even a compromised server can't permanently destroy data within the retention window.
-- **Encryption:** objects are encrypted at rest with AES-256 (SSE-S3). For sensitive backups, consider client-side encryption (e.g., `restic`, `duplicity`) before uploading.
+- **Encryption:** objects are encrypted at rest with AES-256 (SSE-S3).
+- **NixOS rollback:** if a config change breaks things, reboot and select a previous generation from the boot menu.
 
 ## Maintenance
 
-### Harden existing server (fail2ban)
+### Change configuration
 
-If your server was set up before fail2ban WebDAV protection was added, run the hardening script:
+Edit `/etc/nixos/configuration.nix` on the server, then:
 
 ```bash
-scp -i your-key.pem harden-fail2ban.sh ec2-user@ELASTIC_IP:~
-ssh -i your-key.pem ec2-user@ELASTIC_IP
-sudo ./harden-fail2ban.sh
+sudo nixos-rebuild switch
 ```
 
-This enables three fail2ban jails:
+To roll back:
 
-| Jail | Trigger | Ban duration |
-|------|---------|--------------|
-| `sshd` | 5 failed SSH logins in 10 min | 1 hour |
-| `caddy-auth` | 5 failed WebDAV logins (401) in 10 min | 1 hour |
-| `caddy-botscan` | 15 path-scan 404s in 5 min | 1 hour |
-
-The script also enables Caddy access logging (required for the Caddy jails) and is safe to re-run.
-
-New servers get this automatically via `setup-server.sh`.
+```bash
+sudo nixos-rebuild switch --rollback
+```
 
 ### Rotate WebDAV password
 
 ```bash
-ssh -i your-key.pem ec2-user@ELASTIC_IP
-
 # Generate new hash
-caddy hash-password --plaintext 'NEW_PASSWORD'
+nix-shell -p caddy --run "caddy hash-password --plaintext 'NEW_PASSWORD'"
 
-# Edit /etc/caddy/Caddyfile — replace the old hash with the new one
-sudo vim /etc/caddy/Caddyfile
+# Update /etc/nixos/secrets.nix with new hash
+sudo vim /etc/nixos/secrets.nix
 
-# Reload Caddy (no downtime)
-sudo systemctl reload caddy
+# Apply
+sudo nixos-rebuild switch
 ```
 
-Then update the password on all clients (RetroArch, backup scripts, etc.).
-
-### Rotate SSH key pair
-
-1. Create a new key pair in the AWS console
-2. Add the new public key to `~/.ssh/authorized_keys` on the instance
-3. Verify you can SSH with the new key
-4. Remove the old key from `authorized_keys`
-5. Delete the old key pair from AWS console
-
-### Check disk usage
-
-The 8GB EBS volume holds the OS and rclone VFS cache. It shouldn't fill up, but worth checking occasionally:
+### Update NixOS channel
 
 ```bash
-df -h /
-sudo du -sh /home/ec2-user/.cache/rclone
+sudo nix-channel --update
+sudo nixos-rebuild switch
 ```
 
-### Review S3 storage and costs
+Or just wait — `system.autoUpgrade` does this daily.
+
+### Review S3 storage
 
 ```bash
-# Total size of each prefix
-sudo -u ec2-user rclone size s3-saves:BUCKET/retroarch
-sudo -u ec2-user rclone size s3-saves:BUCKET/backups
-sudo -u ec2-user rclone size s3-saves:BUCKET/media
+nix-shell -p rclone --run "rclone size :s3:BUCKET/retroarch --s3-provider AWS --s3-region us-east-1 --s3-env-auth"
 ```
 
-Or check the S3 bucket metrics in the AWS console under CloudWatch → Storage Metrics.
-
-### Verify TLS certificate renewal
-
-Caddy auto-renews certificates. To confirm:
+### Check fail2ban status
 
 ```bash
-sudo caddy list-certs
-sudo journalctl -u caddy --grep="certificate\|tls" --since "7 days ago"
-```
-
-### Update rclone
-
-```bash
-sudo curl -fsSL https://rclone.org/install.sh | sudo bash
-sudo systemctl restart rclone-webdav
-```
-
-### OS patches
-
-`dnf-automatic` applies security patches automatically. To manually check or force a full update:
-
-```bash
-sudo dnf check-update
-sudo dnf upgrade -y
-sudo reboot  # if kernel was updated
-```
-
-### Recommended cadence
-
-| Task | Frequency |
-|------|-----------|
-| Rotate WebDAV password | Every 6–12 months |
-| Rotate SSH key pair | Annually or if compromised |
-| Check disk usage | Every few months |
-| Review S3 costs | Monthly (check AWS billing) |
-| Verify TLS cert | After any instance recovery |
-| Update rclone | Every few months or when needed |
-| Update Caddy | Every few months (re-download from GitHub releases) |
-| OS patches | Automatic (verify after recovery) |
-
-## Troubleshooting
-
-```bash
-ssh -i your-key.pem ec2-user@ELASTIC_IP
-
-sudo systemctl status caddy              # Caddy (TLS + auth)
-sudo systemctl status rclone-webdav      # rclone (WebDAV → S3)
-sudo journalctl -u caddy -f             # Caddy logs
-sudo journalctl -u rclone-webdav -f      # rclone logs
-sudo -u ec2-user rclone ls s3-saves:BUCKET # List synced files
-```
-
-### fail2ban
-
-```bash
-# Check which jails are active
 sudo fail2ban-client status
-
-# Check a specific jail (banned IPs, failure count)
 sudo fail2ban-client status caddy-auth
-sudo fail2ban-client status caddy-botscan
-sudo fail2ban-client status sshd
+sudo fail2ban-client set caddy-auth unbanip 1.2.3.4  # manually unban
+```
 
-# Manually unban an IP
-sudo fail2ban-client set caddy-auth unbanip 1.2.3.4
+## File structure
 
-# Watch bans in real time
-sudo journalctl -u fail2ban -f
-
-# Test a filter against the log (dry run)
-sudo fail2ban-regex /var/log/caddy/access.log /etc/fail2ban/filter.d/caddy-auth.conf
+```
+.
+├── template.yaml                  # CloudFormation (EC2, S3, IAM, alarms)
+├── nixos/
+│   ├── configuration.nix          # Full NixOS system config (deploy to /etc/nixos/)
+│   └── secrets.nix.example        # Template for machine-specific secrets
+└── README.md
 ```
 
 ## Teardown
 
 ```bash
-aws cloudformation delete-stack --stack-name retroarch-saves
+aws cloudformation delete-stack --stack-name cloud-storage
 
 # S3 bucket is retained — delete manually if wanted:
 aws s3 rb s3://retroarch-saves-ACCOUNT_ID --force
 ```
+
+## Migration from AL2023
+
+If you previously ran this on Amazon Linux 2023:
+
+1. Deploy the new stack (or update the existing one with the new template + NixOS AMI)
+2. Your S3 data is untouched — the new NixOS instance connects to the same bucket
+3. Point DNS to the new Elastic IP (or reuse the old one)
+4. The old `setup-server.sh` and `harden-fail2ban.sh` scripts are no longer needed — everything is in `configuration.nix`

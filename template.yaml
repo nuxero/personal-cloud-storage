@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  RetroArch Cloud Saves — EC2 infrastructure with S3, auto-recovery, and alerting.
+  Personal Cloud Storage — EC2 infrastructure (NixOS) with S3, auto-recovery, and alerting.
 
 Parameters:
   KeyPairName:
@@ -25,9 +25,13 @@ Parameters:
       - t4g.micro
       - t4g.small
 
-  LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  NixOsAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: >
+      NixOS AMI ID for aarch64. Find the latest at:
+      https://nixos.org/download#nixos-amazon or use the
+      Determinate Systems AMIs. Example for us-east-1:
+      ami-0c4e4b59f2b8d2d3e (NixOS 25.05, arm64)
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
@@ -94,7 +98,7 @@ Resources:
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: RetroArch WebDAV server
+      GroupDescription: Personal cloud storage WebDAV server
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -113,7 +117,7 @@ Resources:
           Description: SSH access
       Tags:
         - Key: Name
-          Value: retroarch-webdav
+          Value: cloud-storage
 
   ElasticIp:
     Type: AWS::EC2::EIP
@@ -121,7 +125,7 @@ Resources:
       Domain: vpc
       Tags:
         - Key: Name
-          Value: retroarch-webdav
+          Value: cloud-storage
 
   ElasticIpAssociation:
     Type: AWS::EC2::EIPAssociation
@@ -133,7 +137,7 @@ Resources:
   Instance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref LatestAmiId
+      ImageId: !Ref NixOsAmiId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyPairName
       IamInstanceProfile: !Ref InstanceProfile
@@ -141,11 +145,11 @@ Resources:
         - !Ref SecurityGroup
       Tags:
         - Key: Name
-          Value: retroarch-webdav
+          Value: cloud-storage
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 8
+            VolumeSize: 16
             VolumeType: gp3
             Encrypted: true
 
@@ -154,7 +158,7 @@ Resources:
     Type: AWS::SNS::Topic
     Condition: HasAlertEmail
     Properties:
-      TopicName: retroarch-webdav-alarms
+      TopicName: cloud-storage-alarms
 
   AlarmSubscription:
     Type: AWS::SNS::Subscription
@@ -168,7 +172,7 @@ Resources:
   RecoveryAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: retroarch-webdav-recovery
+      AlarmName: cloud-storage-recovery
       AlarmDescription: Auto-recovers the instance on system status check failure
       Namespace: AWS/EC2
       MetricName: StatusCheckFailed_System
@@ -184,11 +188,11 @@ Resources:
         - !Sub 'arn:aws:automate:${AWS::Region}:ec2:recover'
         - !If [HasAlertEmail, !Ref AlarmTopic, !Ref 'AWS::NoValue']
 
-  # Alert if instance is down (status check covers both instance and system)
+  # Alert if instance is down
   InstanceDownAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: retroarch-webdav-down
+      AlarmName: cloud-storage-down
       AlarmDescription: Instance failing status checks for 5+ minutes
       Namespace: AWS/EC2
       MetricName: StatusCheckFailed
@@ -209,13 +213,13 @@ Outputs:
     Value: !Ref ElasticIp
 
   BucketName:
-    Description: S3 bucket name (used by setup.sh)
+    Description: S3 bucket name (for secrets.nix)
     Value: !Ref SavesBucket
 
   SshCommand:
-    Description: SSH into the instance
-    Value: !Sub 'ssh -i ${KeyPairName}.pem ec2-user@${ElasticIp}'
+    Description: SSH into the instance (NixOS default user is 'root' on first boot)
+    Value: !Sub 'ssh -i ${KeyPairName}.pem root@${ElasticIp}'
 
-  SetupCommand:
-    Description: Run after SSH
-    Value: !Sub 'sudo ./setup.sh --domain YOURDOMAIN --bucket ${SavesBucket} --region ${AWS::Region}'
+  DeployHint:
+    Description: After SSH, copy nixos/configuration.nix and secrets.nix then run nixos-rebuild switch
+    Value: 'See README for deployment steps'
