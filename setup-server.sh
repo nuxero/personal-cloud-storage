@@ -138,9 +138,19 @@ sudo -u ec2-user rclone lsd "s3-saves:${BUCKET}" &>/dev/null \
 # --- Generate bcrypt hash for Caddy basicauth ---
 PASS_HASH=$(caddy hash-password --plaintext "$WEBDAV_PASS")
 
-# --- Caddyfile ---
+# --- Caddyfile (with access logging for fail2ban) ---
+mkdir -p /var/log/caddy
+chown caddy:caddy /var/log/caddy
+
 cat > /etc/caddy/Caddyfile << EOF
 ${DOMAIN} {
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10MiB
+            roll_keep 5
+            roll_keep_for 14d
+        }
+    }
     basicauth {
         ${WEBDAV_USER} ${PASS_HASH}
     }
@@ -181,6 +191,68 @@ chown ec2-user:ec2-user /home/ec2-user/.cache/rclone
 
 # --- Hardening + auto-updates ---
 echo "[5/5] Hardening..."
+
+# fail2ban filter: Caddy authentication failures (401)
+cat > /etc/fail2ban/filter.d/caddy-auth.conf << 'FILTEREOF'
+# fail2ban filter for Caddy basicauth brute-force attempts.
+# Matches JSON access log lines where status is 401 (Unauthorized).
+
+[Definition]
+
+failregex = ^\{.*"remote_ip":"<HOST>".*"status":401[,\}]
+
+ignoreregex =
+FILTEREOF
+
+# fail2ban filter: Caddy path scanning (404 floods)
+cat > /etc/fail2ban/filter.d/caddy-botscan.conf << 'FILTEREOF'
+# fail2ban filter for aggressive path scanning / vulnerability probes.
+# Matches JSON access log lines where status is 404 (Not Found).
+
+[Definition]
+
+failregex = ^\{.*"remote_ip":"<HOST>".*"status":404[,\}]
+
+ignoreregex =
+FILTEREOF
+
+# fail2ban jail configuration
+cat > /etc/fail2ban/jail.d/webdav.conf << 'JAILEOF'
+# Jails for the Caddy WebDAV server.
+
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = /var/log/secure
+maxretry = 5
+findtime = 600
+bantime  = 3600
+backend  = auto
+
+# Ban IP after 5 failed login attempts within 10 minutes (1 hour ban).
+[caddy-auth]
+enabled  = true
+port     = http,https
+filter   = caddy-auth
+logpath  = /var/log/caddy/access.log
+maxretry = 5
+findtime = 600
+bantime  = 3600
+backend  = auto
+
+# Ban IP after 15 consecutive 404s within 5 minutes (1 hour ban).
+[caddy-botscan]
+enabled  = true
+port     = http,https
+filter   = caddy-botscan
+logpath  = /var/log/caddy/access.log
+maxretry = 15
+findtime = 300
+bantime  = 3600
+backend  = auto
+JAILEOF
+
 systemctl enable --now fail2ban
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer

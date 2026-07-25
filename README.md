@@ -90,7 +90,9 @@ The script prompts for a WebDAV password, then installs rclone, gets a TLS cert,
 | Instance down 5+ min | Email alert |
 | TLS cert expiry | Caddy auto-renews via built-in ACME client |
 | OS vulnerabilities | `dnf-automatic` applies security patches |
-| SSH brute force | fail2ban |
+| SSH brute force | fail2ban (`sshd` jail) |
+| WebDAV brute force | fail2ban (`caddy-auth` jail) |
+| Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
 
 ## Configure RetroArch
 
@@ -158,6 +160,28 @@ rclone copy "/path/to/files/" saves:"backups/folder/" --progress
 - **Encryption:** objects are encrypted at rest with AES-256 (SSE-S3). For sensitive backups, consider client-side encryption (e.g., `restic`, `duplicity`) before uploading.
 
 ## Maintenance
+
+### Harden existing server (fail2ban)
+
+If your server was set up before fail2ban WebDAV protection was added, run the hardening script:
+
+```bash
+scp -i your-key.pem harden-fail2ban.sh ec2-user@ELASTIC_IP:~
+ssh -i your-key.pem ec2-user@ELASTIC_IP
+sudo ./harden-fail2ban.sh
+```
+
+This enables three fail2ban jails:
+
+| Jail | Trigger | Ban duration |
+|------|---------|--------------|
+| `sshd` | 5 failed SSH logins in 10 min | 1 hour |
+| `caddy-auth` | 5 failed WebDAV logins (401) in 10 min | 1 hour |
+| `caddy-botscan` | 15 path-scan 404s in 5 min | 1 hour |
+
+The script also enables Caddy access logging (required for the Caddy jails) and is safe to re-run.
+
+New servers get this automatically via `setup-server.sh`.
 
 ### Rotate WebDAV password
 
@@ -253,6 +277,27 @@ sudo systemctl status rclone-webdav      # rclone (WebDAV → S3)
 sudo journalctl -u caddy -f             # Caddy logs
 sudo journalctl -u rclone-webdav -f      # rclone logs
 sudo -u ec2-user rclone ls s3-saves:BUCKET # List synced files
+```
+
+### fail2ban
+
+```bash
+# Check which jails are active
+sudo fail2ban-client status
+
+# Check a specific jail (banned IPs, failure count)
+sudo fail2ban-client status caddy-auth
+sudo fail2ban-client status caddy-botscan
+sudo fail2ban-client status sshd
+
+# Manually unban an IP
+sudo fail2ban-client set caddy-auth unbanip 1.2.3.4
+
+# Watch bans in real time
+sudo journalctl -u fail2ban -f
+
+# Test a filter against the log (dry run)
+sudo fail2ban-regex /var/log/caddy/access.log /etc/fail2ban/filter.d/caddy-auth.conf
 ```
 
 ## Teardown
