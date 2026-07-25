@@ -44,9 +44,6 @@ in
   # Deduplicate identical files in the Nix store
   nix.settings.auto-optimise-store = true;
 
-  # Only keep 5 boot generations (overrides amazon-image default of 0)
-  boot.loader.grub.configurationLimit = lib.mkForce 5;
-
   # --- Packages ---
   environment.systemPackages = with pkgs; [
     rclone
