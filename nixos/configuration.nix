@@ -34,12 +34,18 @@ in
     dates = "04:00";
   };
 
-  # Garbage-collect old generations weekly
+  # Garbage-collect old generations daily (keep only last 3 days)
   nix.gc = {
     automatic = true;
-    dates = "weekly";
-    options = "--delete-older-than 30d";
+    dates = "daily";
+    options = "--delete-older-than 3d";
   };
+
+  # Deduplicate identical files in the Nix store
+  nix.settings.auto-optimise-store = true;
+
+  # Only keep 5 boot generations (overrides amazon-image default of 0)
+  boot.loader.grub.configurationLimit = lib.mkForce 5;
 
   # --- Packages ---
   environment.systemPackages = with pkgs; [
