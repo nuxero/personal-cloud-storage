@@ -28,9 +28,9 @@ Parameters:
   LatestAmiId:
     Type: String
     Description: >
-      AMI ID for the instance (aarch64). Use a NixOS 25.05 arm64 AMI.
-      Find one at: https://nixos.org/download#nixos-amazon or
-      https://github.com/DeterminateSystems/nixos-amis
+      AMI ID for the instance (aarch64). Use a NixOS 26.05 arm64 AMI.
+      Query the latest with:
+        aws ec2 describe-images --owners 427812963091 --filters 'Name=name,Values=nixos/26.05*' 'Name=architecture,Values=arm64' --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
