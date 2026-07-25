@@ -25,13 +25,12 @@ Parameters:
       - t4g.micro
       - t4g.small
 
-  NixOsAmiId:
+  AmiId:
     Type: AWS::EC2::Image::Id
     Description: >
-      NixOS AMI ID for aarch64. Find the latest at:
-      https://nixos.org/download#nixos-amazon or use the
-      Determinate Systems AMIs. Example for us-east-1:
-      ami-0c4e4b59f2b8d2d3e (NixOS 25.05, arm64)
+      AMI ID for the instance (aarch64). Use a NixOS 25.05 arm64 AMI.
+      Find one at: https://nixos.org/download#nixos-amazon or
+      https://github.com/DeterminateSystems/nixos-amis
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
@@ -137,7 +136,7 @@ Resources:
   Instance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref NixOsAmiId
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyPairName
       IamInstanceProfile: !Ref InstanceProfile

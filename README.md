@@ -47,7 +47,33 @@ Clients target their respective path on the WebDAV endpoint:
 
 ## Setup
 
-### 1. Deploy infrastructure
+### If you have an existing stack (migrating from AL2023)
+
+Your Elastic IP, S3 bucket, IAM role, and alarms stay the same. You just swap the instance:
+
+```bash
+# 1. Find a NixOS 25.05 arm64 AMI for your region (see "Finding the NixOS AMI" below)
+
+# 2. Update the stack — this replaces the EC2 instance but keeps everything else
+aws cloudformation deploy \
+  --template-file template.yaml \
+  --stack-name retroarch-saves \
+  --parameter-overrides \
+    KeyPairName=your-key \
+    SshCidr=YOUR_IP/32 \
+    AlertEmail=you@example.com \
+    AmiId=ami-XXXXXXXXXXXXXXXXX \
+  --capabilities CAPABILITY_IAM
+```
+
+CloudFormation will:
+- Terminate the old AL2023 instance
+- Launch a new NixOS instance with the same IAM role, security group, and Elastic IP
+- Your DNS still points to the same IP — no changes needed
+
+Then proceed to [step 3 (Configure the server)](#3-configure-the-server).
+
+### Fresh deployment
 
 ```bash
 aws cloudformation deploy \
@@ -57,7 +83,7 @@ aws cloudformation deploy \
     KeyPairName=your-key \
     SshCidr=YOUR_IP/32 \
     AlertEmail=you@example.com \
-    NixOsAmiId=ami-XXXXXXXXXXXXXXXXX \
+    AmiId=ami-XXXXXXXXXXXXXXXXX \
   --capabilities CAPABILITY_IAM
 ```
 
@@ -293,9 +319,13 @@ aws s3 rb s3://retroarch-saves-ACCOUNT_ID --force
 
 ## Migration from AL2023
 
-If you previously ran this on Amazon Linux 2023:
+If you previously ran this on Amazon Linux 2023 with the same stack name:
 
-1. Deploy the new stack (or update the existing one with the new template + NixOS AMI)
-2. Your S3 data is untouched — the new NixOS instance connects to the same bucket
-3. Point DNS to the new Elastic IP (or reuse the old one)
-4. The old `setup-server.sh` and `harden-fail2ban.sh` scripts are no longer needed — everything is in `configuration.nix`
+1. Find a NixOS arm64 AMI for your region
+2. Run the `aws cloudformation deploy` command above with `AmiId=ami-...` — this replaces the instance in-place
+3. SSH in as `root` (NixOS AMIs use root with EC2 key pair on first boot)
+4. Copy `nixos/configuration.nix` to `/etc/nixos/configuration.nix`
+5. Create `/etc/nixos/secrets.nix` (see `nixos/secrets.nix.example`)
+6. Run `nixos-rebuild switch`
+
+Your S3 data is untouched — the new NixOS instance connects to the same bucket via the same IAM role. DNS doesn't change because the Elastic IP is preserved.
