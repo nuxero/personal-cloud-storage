@@ -26,8 +26,11 @@ Parameters:
       - t4g.small
 
   LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Type: String
+    Description: >
+      AMI ID for the instance (aarch64). Use a NixOS 25.05 arm64 AMI.
+      Find one at: https://nixos.org/download#nixos-amazon or
+      https://github.com/DeterminateSystems/nixos-amis
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
@@ -141,11 +144,11 @@ Resources:
         - !Ref SecurityGroup
       Tags:
         - Key: Name
-          Value: retroarch-webdav
+          Value: cloud-storage
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 8
+            VolumeSize: 16
             VolumeType: gp3
             Encrypted: true
 
@@ -213,9 +216,9 @@ Outputs:
     Value: !Ref SavesBucket
 
   SshCommand:
-    Description: SSH into the instance
-    Value: !Sub 'ssh -i ${KeyPairName}.pem ec2-user@${ElasticIp}'
+    Description: SSH into the instance (NixOS uses 'root' on first boot with EC2 key pair)
+    Value: !Sub 'ssh -i ${KeyPairName}.pem root@${ElasticIp}'
 
   SetupCommand:
-    Description: Run after SSH
-    Value: !Sub 'sudo ./setup.sh --domain YOURDOMAIN --bucket ${SavesBucket} --region ${AWS::Region}'
+    Description: After first SSH, copy configuration.nix and secrets.nix then run nixos-rebuild switch
+    Value: 'See README for NixOS deployment steps'
