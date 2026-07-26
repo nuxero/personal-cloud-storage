@@ -19,11 +19,11 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t4g.nano
+    Default: t4g.small
     AllowedValues:
-      - t4g.nano
-      - t4g.micro
       - t4g.small
+      - t4g.micro
+      - t4g.medium
 
   LatestAmiId:
     Type: String
