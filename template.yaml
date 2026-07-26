@@ -47,10 +47,32 @@ Resources:
         Status: Enabled
       LifecycleConfiguration:
         Rules:
-          - Id: expire-old-versions
+          # RetroArch saves — keep 30 days of old versions
+          - Id: retroarch-version-expiry
             Status: Enabled
+            Prefix: retroarch/
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
+          # Backups — keep 90 days of old versions
+          - Id: backups-version-expiry
+            Status: Enabled
+            Prefix: backups/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+          # Media — move to Infrequent Access after 30 days (cheaper)
+          - Id: media-to-ia
+            Status: Enabled
+            Prefix: media/
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          # Clean up failed multipart uploads
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
