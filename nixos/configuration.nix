@@ -29,6 +29,9 @@ in
   system.stateVersion = secrets.stateVersion;
   networking.hostName = "storage";
 
+  # Limit boot entries to prevent /boot from filling up (EFI partition is only 249MB).
+  boot.loader.systemd-boot.configurationLimit = 2;
+
   # --- Auto-upgrades ---
   system.autoUpgrade = {
     enable = true;
@@ -114,14 +117,6 @@ in
     enable = true;
     virtualHosts.${secrets.domain} = {
       extraConfig = ''
-        log {
-            output file /var/log/caddy/access.log {
-                roll_size 10MiB
-                roll_keep 5
-                roll_keep_for 14d
-            }
-        }
-
         # RetroArch user — restricted to /retroarch/* only.
         # This password is stored in plain text by RetroArch, so treat it
         # as disposable. If compromised, only game saves are exposed.
@@ -145,12 +140,6 @@ in
     };
   };
 
-  # Ensure Caddy log directory exists
-  systemd.tmpfiles.rules = [
-    "d /var/log/caddy 0755 caddy caddy -"
-    "f /var/log/caddy/access.log 0644 caddy caddy -"
-  ];
-
   # --- fail2ban ---
   services.fail2ban = {
     enable = true;
@@ -171,7 +160,7 @@ in
         enabled = true;
         port = "http,https";
         filter = "caddy-auth";
-        logpath = "/var/log/caddy/access.log";
+        logpath = "/var/log/caddy/access-*.log";
         backend = "auto";
         maxretry = 20;
         findtime = 60;
@@ -182,7 +171,7 @@ in
         enabled = true;
         port = "http,https";
         filter = "caddy-botscan";
-        logpath = "/var/log/caddy/access.log";
+        logpath = "/var/log/caddy/access-*.log";
         backend = "auto";
         maxretry = 15;
         findtime = 300;
