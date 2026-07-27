@@ -162,14 +162,17 @@ in
     };
     jails = {
       # Caddy WebDAV authentication brute-force (401 responses)
+      # maxretry is set high enough to allow non-preemptive WebDAV clients
+      # (which generate 2-3 legitimate 401 challenge-response cycles per connection)
+      # while still catching brute-force attacks within a tight window.
       caddy-auth.settings = {
         enabled = true;
         port = "http,https";
         filter = "caddy-auth";
         logpath = "/var/log/caddy/access.log";
         backend = "auto";
-        maxretry = 5;
-        findtime = 600;
+        maxretry = 20;
+        findtime = 60;
         bantime = 3600;
       };
       # Caddy path scanning / vulnerability probes (404 floods)
