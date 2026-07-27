@@ -119,10 +119,26 @@ in
                 roll_keep_for 14d
             }
         }
-        basic_auth {
-            ${secrets.webdavUser} ${secrets.webdavPasswordHash}
+
+        # RetroArch user — restricted to /retroarch/* only.
+        # This password is stored in plain text by RetroArch, so treat it
+        # as disposable. If compromised, only game saves are exposed.
+        @retroarch_path path /retroarch/*
+        handle @retroarch_path {
+            basic_auth {
+                ${secrets.retroarchUser} ${secrets.retroarchPasswordHash}
+                ${secrets.adminUser} ${secrets.adminPasswordHash}
+            }
+            reverse_proxy localhost:8080
         }
-        reverse_proxy localhost:8080
+
+        # Admin user — full access to all paths (/backups/*, /media/*, etc.)
+        handle {
+            basic_auth {
+                ${secrets.adminUser} ${secrets.adminPasswordHash}
+            }
+            reverse_proxy localhost:8080
+        }
       '';
     };
   };
