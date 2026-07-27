@@ -16,9 +16,9 @@ Personal cloud storage server using S3 + WebDAV, managed declaratively with NixO
                          └────────────────────────────────────┘
 ```
 
-**OS:** NixOS 26.05 (stable) — entire server configuration is declarative and reproducible.
+**OS:** NixOS (stable channel) — entire server configuration is declarative and reproducible.
 
-**Cost:** ~$3/month (EC2) + pennies (S3).
+**Cost:** ~$12/month (EC2) + pennies (S3).
 
 ## Storage layout
 
@@ -36,26 +36,7 @@ Clients target their respective path:
 
 ## Setup
 
-### Migrating from AL2023 (existing stack)
-
-Your Elastic IP, S3 bucket, IAM role, and alarms stay the same. You just swap the instance:
-
-```bash
-# Update the stack — this replaces the EC2 instance but keeps everything else
-aws cloudformation deploy \
-  --template-file template.yaml \
-  --stack-name retroarch-saves \
-  --parameter-overrides \
-    KeyPairName=your-key \
-    SshCidr=YOUR_IP/32 \
-    AlertEmail=you@example.com \
-    LatestAmiId=ami-XXXXXXXXXXXXXXXXX \
-  --capabilities CAPABILITY_IAM
-```
-
-CloudFormation will terminate the old instance and launch a new NixOS one with the same Elastic IP, IAM role, and security group. DNS doesn't change.
-
-### Fresh deployment
+### Deploy the stack
 
 ```bash
 aws cloudformation deploy \
@@ -75,7 +56,7 @@ aws cloudformation deploy \
 |--------|-------|
 | [NixOS download page](https://nixos.org/download#nixos-amazon) | Official AMIs by region |
 | [Determinate Systems](https://github.com/DeterminateSystems/nixos-amis) | Optimized AMIs for x86_64 and aarch64 |
-| [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-lomgvizeucgwe) | NixOS 26.05 by Epok Systems |
+| [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-lomgvizeucgwe) | NixOS (stable) by Epok Systems |
 
 ### Configure the server
 
@@ -97,11 +78,14 @@ Create the secrets file on the server:
 ```bash
 cat > /etc/nixos/secrets.nix << 'EOF'
 {
+  stateVersion = "26.05";  # match the NixOS version of the AMI you launched
   domain = "storage.yourdomain.com";
   s3Bucket = "retroarch-saves-ACCOUNTID";
   s3Region = "us-east-1";
-  webdavUser = "retroarch";
-  webdavPasswordHash = "PASTE_HASH_HERE";
+  retroarchUser = "retroarch";
+  retroarchPasswordHash = "PASTE_HASH_HERE";
+  adminUser = "myuser";
+  adminPasswordHash = "PASTE_HASH_HERE";
   sshPublicKeys = [
     "ssh-ed25519 AAAAC3... your-key"
   ];
@@ -209,6 +193,28 @@ Happens automatically daily. To force:
 sudo nix-channel --update
 sudo nixos-rebuild switch
 ```
+
+### Switch to unstable channel
+
+Unstable is rolling release — no channel hops every 6 months. Trade-off is a small risk of occasional breakage (mitigated by NixOS rollback).
+
+```bash
+sudo nix-channel --add https://nixos.org/channels/nixos-unstable nixos
+sudo nix-channel --update
+sudo nixos-rebuild switch
+```
+
+### Upgrade to a new stable release
+
+When a new stable release comes out (e.g., 26.11), point the channel to it:
+
+```bash
+sudo nix-channel --add https://nixos.org/channels/nixos-26.11 nixos
+sudo nix-channel --update
+sudo nixos-rebuild switch
+```
+
+No reinstall or new AMI needed. `system.stateVersion` in `secrets.nix` stays unchanged — it always reflects the version used at *initial* deployment.
 
 ## File structure
 

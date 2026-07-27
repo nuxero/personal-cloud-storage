@@ -6,7 +6,7 @@
 # Architecture: Caddy (TLS + auth) -> rclone (WebDAV -> S3)
 #
 # Deployment:
-#   1. Launch a NixOS AMI on EC2 (t4g.nano, arm64)
+#   1. Launch a NixOS AMI on EC2 (t4g.small, arm64)
 #   2. Copy this file to /etc/nixos/configuration.nix
 #   3. Create /etc/nixos/secrets.nix with your credentials (see secrets.nix.example)
 #   4. Run: sudo nixos-rebuild switch
@@ -24,7 +24,9 @@ in
   ];
 
   # --- System ---
-  system.stateVersion = "26.05";
+  # stateVersion is set per-machine in secrets.nix — it must match the NixOS
+  # version used at initial deployment and should never be changed afterward.
+  system.stateVersion = secrets.stateVersion;
   networking.hostName = "storage";
 
   # --- Auto-upgrades ---
