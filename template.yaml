@@ -21,8 +21,8 @@ Parameters:
     Type: String
     Default: t4g.small
     AllowedValues:
-      - t4g.small
       - t4g.micro
+      - t4g.small
       - t4g.medium
 
   LatestAmiId:
@@ -53,21 +53,28 @@ Resources:
             Prefix: retroarch/
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
-          # Backups — keep 90 days of old versions
-          - Id: backups-version-expiry
+          # NS saves — same behavior as RetroArch
+          - Id: ns-version-expiry
             Status: Enabled
-            Prefix: backups/
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 90
-          # Media — move to Infrequent Access after 30 days (cheaper)
-          - Id: media-to-ia
-            Status: Enabled
-            Prefix: media/
-            Transitions:
-              - StorageClass: STANDARD_IA
-                TransitionInDays: 30
+            Prefix: ns/
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
+          # Media — actively accessed, keep 30 days of old versions
+          - Id: media-version-expiry
+            Status: Enabled
+            Prefix: media/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          # Backups — move to Glacier Instant Retrieval after 30 days,
+          # keep 90 days of old versions
+          - Id: backups-to-glacier-ir
+            Status: Enabled
+            Prefix: backups/
+            Transitions:
+              - StorageClass: GLACIER_IR
+                TransitionInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
           # Clean up failed multipart uploads
           - Id: abort-incomplete-uploads
             Status: Enabled
