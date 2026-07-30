@@ -117,6 +117,21 @@ in
     enable = true;
     virtualHosts.${secrets.domain} = {
       extraConfig = ''
+        # --- CORS for Diffuse music player (https://diffuse.sh) ---
+        # Diffuse is a static web app that needs cross-origin access to WebDAV.
+        @cors_preflight method OPTIONS
+        @cors_origin header Origin https://diffuse.sh
+
+        # Handle CORS preflight requests (no auth required)
+        handle @cors_preflight {
+            header Access-Control-Allow-Origin "https://diffuse.sh"
+            header Access-Control-Allow-Methods "GET, HEAD, PROPFIND, OPTIONS"
+            header Access-Control-Allow-Headers "Authorization, Content-Type, Depth, Range"
+            header Access-Control-Allow-Credentials "true"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+
         # RetroArch user — restricted to /retroarch/* only.
         # This password is stored in plain text by RetroArch, so treat it
         # as disposable. If compromised, only game saves are exposed.
@@ -129,11 +144,32 @@ in
             reverse_proxy localhost:8080
         }
 
+        # Music (Diffuse) user — restricted to /media/music/* only.
+        # Read-only WebDAV access for the Diffuse music player.
+        @music_path path /media/music/*
+        handle @music_path {
+            basic_auth {
+                ${secrets.diffuseUser} ${secrets.diffusePasswordHash}
+                ${secrets.adminUser} ${secrets.adminPasswordHash}
+            }
+            # Add CORS headers on actual responses for Diffuse
+            @cors_actual header Origin https://diffuse.sh
+            header @cors_actual Access-Control-Allow-Origin "https://diffuse.sh"
+            header @cors_actual Access-Control-Allow-Credentials "true"
+            header @cors_actual Access-Control-Expose-Headers "Content-Length, Content-Type"
+            reverse_proxy localhost:8080
+        }
+
         # Admin user — full access to all paths (/backups/*, /media/*, etc.)
         handle {
             basic_auth {
                 ${secrets.adminUser} ${secrets.adminPasswordHash}
             }
+            # Add CORS headers for admin paths too (Diffuse can use admin creds)
+            @cors_admin header Origin https://diffuse.sh
+            header @cors_admin Access-Control-Allow-Origin "https://diffuse.sh"
+            header @cors_admin Access-Control-Allow-Credentials "true"
+            header @cors_admin Access-Control-Expose-Headers "Content-Length, Content-Type"
             reverse_proxy localhost:8080
         }
       '';
