@@ -144,15 +144,15 @@ in
             reverse_proxy localhost:8080
         }
 
-        # Music (Diffuse) user — restricted to /media/music/* only.
-        # Read-only WebDAV access for the Diffuse music player.
-        @music_path path /media/music/*
+        # DJ user — restricted to /media/* only.
+        # Used by the Diffuse music player (https://diffuse.sh) for WebDAV access.
+        @music_path path /media/*
         handle @music_path {
             basic_auth {
-                ${secrets.diffuseUser} ${secrets.diffusePasswordHash}
+                ${secrets.djUser} ${secrets.djPassword}
                 ${secrets.adminUser} ${secrets.adminPasswordHash}
             }
-            # Add CORS headers on actual responses for Diffuse
+            # CORS headers for Diffuse on actual responses
             @cors_actual header Origin https://diffuse.sh
             header @cors_actual Access-Control-Allow-Origin "https://diffuse.sh"
             header @cors_actual Access-Control-Allow-Credentials "true"
@@ -165,11 +165,6 @@ in
             basic_auth {
                 ${secrets.adminUser} ${secrets.adminPasswordHash}
             }
-            # Add CORS headers for admin paths too (Diffuse can use admin creds)
-            @cors_admin header Origin https://diffuse.sh
-            header @cors_admin Access-Control-Allow-Origin "https://diffuse.sh"
-            header @cors_admin Access-Control-Allow-Credentials "true"
-            header @cors_admin Access-Control-Expose-Headers "Content-Length, Content-Type"
             reverse_proxy localhost:8080
         }
       '';

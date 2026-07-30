@@ -89,8 +89,8 @@ cat > /etc/nixos/secrets.nix << 'EOF'
   s3Region = "us-east-1";
   retroarchUser = "retroarch";
   retroarchPasswordHash = "PASTE_HASH_HERE";
-  diffuseUser = "diffuse";
-  diffusePasswordHash = "PASTE_HASH_HERE";
+  djUser = "dj";
+  djPassword = "PASTE_HASH_HERE";
   adminUser = "myuser";
   adminPasswordHash = "PASTE_HASH_HERE";
   sshPublicKeys = [
@@ -159,7 +159,7 @@ All devices must match:
 rclone copy ~/Music saves:media/music/ --progress
 
 # Or curl for individual files
-curl -T song.mp3 -u diffuse:PASSWORD "https://storage.yourdomain.com/media/music/song.mp3"
+curl -T song.mp3 -u dj:PASSWORD "https://storage.yourdomain.com/media/music/song.mp3"
 ```
 
 ### Add the source in Diffuse
@@ -172,7 +172,7 @@ curl -T song.mp3 -u diffuse:PASSWORD "https://storage.yourdomain.com/media/music
 | Field | Value |
 |-------|-------|
 | URL | `https://storage.yourdomain.com/media/music/` |
-| Username | `diffuse` |
+| Username | `dj` |
 | Password | (as set during setup) |
 
 5. Click **Save** and then **Process sources** to scan your library
@@ -183,7 +183,7 @@ Diffuse plays whatever your browser supports — typically MP3, FLAC, OGG, WAV, 
 
 ### Access control
 
-The `diffuse` user can only access `/media/music/*`. If you prefer, you can use your admin credentials instead for full access to all media.
+The `dj` user can only access `/media/*`. If you prefer, you can use your admin credentials instead for full access to all paths.
 
 ## Other clients
 
