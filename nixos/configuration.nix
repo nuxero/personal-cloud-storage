@@ -117,6 +117,21 @@ in
     enable = true;
     virtualHosts.${secrets.domain} = {
       extraConfig = ''
+        # --- CORS for Diffuse music player (https://diffuse.sh) ---
+        # Diffuse is a static web app that needs cross-origin access to WebDAV.
+        @cors_preflight method OPTIONS
+        @cors_origin header Origin https://diffuse.sh
+
+        # Handle CORS preflight requests (no auth required)
+        handle @cors_preflight {
+            header Access-Control-Allow-Origin "https://diffuse.sh"
+            header Access-Control-Allow-Methods "GET, HEAD, PROPFIND, OPTIONS"
+            header Access-Control-Allow-Headers "Authorization, Content-Type, Depth, Range"
+            header Access-Control-Allow-Credentials "true"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+
         # RetroArch user — restricted to /retroarch/* only.
         # This password is stored in plain text by RetroArch, so treat it
         # as disposable. If compromised, only game saves are exposed.
@@ -126,6 +141,22 @@ in
                 ${secrets.retroarchUser} ${secrets.retroarchPasswordHash}
                 ${secrets.adminUser} ${secrets.adminPasswordHash}
             }
+            reverse_proxy localhost:8080
+        }
+
+        # DJ user — restricted to /media/* only.
+        # Used by the Diffuse music player (https://diffuse.sh) for WebDAV access.
+        @music_path path /media/*
+        handle @music_path {
+            basic_auth {
+                ${secrets.djUser} ${secrets.djPassword}
+                ${secrets.adminUser} ${secrets.adminPasswordHash}
+            }
+            # CORS headers for Diffuse on actual responses
+            @cors_actual header Origin https://diffuse.sh
+            header @cors_actual Access-Control-Allow-Origin "https://diffuse.sh"
+            header @cors_actual Access-Control-Allow-Credentials "true"
+            header @cors_actual Access-Control-Expose-Headers "Content-Length, Content-Type"
             reverse_proxy localhost:8080
         }
 

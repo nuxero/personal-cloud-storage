@@ -10,8 +10,9 @@ Personal cloud storage server using S3 + WebDAV, managed declaratively with NixO
 │             │          │  ┌───────┐       ┌──────────────┐  │          │  (versioned)│
 │ • RetroArch │◄─────────│  │ Caddy │──────►│ rclone serve │  │◄─────────│             │
 │ • Backup    │          │  │ :443  │ proxy │ webdav :8080 │  │          └─────────────┘
-│ • Media     │          │  │ TLS+  │       │ (localhost)  │  │
-│ • Dolphin   │          │  │ Auth  │       └──────────────┘  │
+│ • Diffuse   │          │  │ TLS+  │       │ (localhost)  │  │
+│ • Dolphin   │          │  │ Auth+ │       └──────────────┘  │
+│             │          │  │ CORS  │                         │
 └─────────────┘          │  └───────┘                         │
                          └────────────────────────────────────┘
 ```
@@ -24,15 +25,19 @@ Personal cloud storage server using S3 + WebDAV, managed declaratively with NixO
 
 ```
 s3:bucket/
-├── retroarch/   ← game saves and states
-├── backups/     ← cold backups (databases, configs, etc.)
-└── media/       ← photos, music, videos
+├── retroarch/       ← game saves and states
+├── backups/         ← cold backups (databases, configs, etc.)
+└── media/
+    ├── music/       ← music library (Diffuse player)
+    ├── photos/      ← photos
+    └── videos/      ← videos
 ```
 
 Clients target their respective path:
 - `https://storage.yourdomain.com/retroarch/`
 - `https://storage.yourdomain.com/backups/`
 - `https://storage.yourdomain.com/media/`
+- `https://storage.yourdomain.com/media/music/` (Diffuse)
 
 ## Setup
 
@@ -84,6 +89,8 @@ cat > /etc/nixos/secrets.nix << 'EOF'
   s3Region = "us-east-1";
   retroarchUser = "retroarch";
   retroarchPasswordHash = "PASTE_HASH_HERE";
+  djUser = "dj";
+  djPassword = "PASTE_HASH_HERE";
   adminUser = "myuser";
   adminPasswordHash = "PASTE_HASH_HERE";
   sshPublicKeys = [
@@ -140,6 +147,43 @@ ssh -i your-key.pem admin@ELASTIC_IP
 All devices must match:
 - Sort Saves into Folders by Core Name → **ON**
 - Sort Save States into Folders by Core Name → **ON**
+
+## Configure Diffuse
+
+[Diffuse](https://diffuse.sh) is a static web-based music player that connects directly to your WebDAV server. Since it runs in the browser at `https://diffuse.sh`, CORS headers are configured in Caddy to allow cross-origin requests.
+
+### Upload your music
+
+```bash
+# Using rclone (recommended for bulk uploads)
+rclone copy ~/Music saves:media/music/ --progress
+
+# Or curl for individual files
+curl -T song.mp3 -u dj:PASSWORD "https://storage.yourdomain.com/media/music/song.mp3"
+```
+
+### Add the source in Diffuse
+
+1. Open [diffuse.sh](https://diffuse.sh)
+2. Go to **Sources** (⚙ icon)
+3. Click **Add source** → **WebDAV**
+4. Fill in:
+
+| Field | Value |
+|-------|-------|
+| URL | `https://storage.yourdomain.com/media/music/` |
+| Username | `dj` |
+| Password | (as set during setup) |
+
+5. Click **Save** and then **Process sources** to scan your library
+
+### Supported formats
+
+Diffuse plays whatever your browser supports — typically MP3, FLAC, OGG, WAV, AAC, and OPUS. Organize your files however you like (folders by artist, album, etc.) — Diffuse reads metadata from the files themselves.
+
+### Access control
+
+The `dj` user can only access `/media/*`. If you prefer, you can use your admin credentials instead for full access to all paths.
 
 ## Other clients
 
