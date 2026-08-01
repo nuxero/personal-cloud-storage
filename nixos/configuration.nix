@@ -183,21 +183,23 @@ in
       overalljails = true;
     };
     jails = {
-      # Caddy WebDAV authentication brute-force (401 responses)
-      # maxretry is set high enough to allow non-preemptive WebDAV clients
-      # (which generate 2-3 legitimate 401 challenge-response cycles per connection)
-      # while still catching brute-force attacks within a tight window.
+      # Caddy authentication brute-force — matches 401 responses where an
+      # Authorization header was present (i.e., credentials were provided but
+      # were WRONG). This excludes the initial 401 challenges where no
+      # credentials are sent (non-preemptive WebDAV clients like KDE
+      # Dolphin/KIO send every request without auth first, get a 401, then
+      # retry with credentials). Only actual failed login attempts are counted.
       caddy-auth.settings = {
         enabled = true;
         port = "http,https";
         filter = "caddy-auth";
         logpath = "/var/log/caddy/access-*.log";
         backend = "auto";
-        maxretry = 20;
-        findtime = 60;
+        maxretry = 5;
+        findtime = 300;
         bantime = 3600;
       };
-      # Caddy path scanning / vulnerability probes (404 floods)
+      # Caddy path scanning / vulnerability probes (404 floods in access log)
       caddy-botscan.settings = {
         enabled = true;
         port = "http,https";
@@ -213,9 +215,15 @@ in
 
   # fail2ban filter definitions
   environment.etc = {
+    # Matches 401 responses where credentials WERE provided (Authorization
+    # header present) — meaning the user/password was actually wrong.
+    # Does NOT match 401 challenges where no credentials were sent.
+    # This is the key distinction: non-preemptive WebDAV clients (Dolphin/KIO)
+    # send requests without auth first → 401 (no Authorization header, not
+    # matched). Only real brute-force attempts (wrong credentials) are caught.
     "fail2ban/filter.d/caddy-auth.local".text = ''
       [Definition]
-      failregex = "remote_ip":"<HOST>".*"status":401
+      failregex = "remote_ip":"<HOST>".*"Authorization":\["REDACTED"\].*"status":401
       datepattern = "ts":{Epoch}
       ignoreregex =
     '';

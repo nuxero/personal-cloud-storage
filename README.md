@@ -196,7 +196,7 @@ rclone copy ./photos saves:media/photos/ --progress
 curl -T database.sql.gz -u retroarch:PASSWORD "https://storage.yourdomain.com/backups/database.sql.gz"
 ```
 
-> **KDE Dolphin / KIO note:** KIO has a bug with HTTP/2 uploads — files larger than ~500KB may be silently corrupted. Use `rclone copy` for uploading. Dolphin is fine for browsing and downloading.
+> **KDE Dolphin / KIO note:** KIO uses non-preemptive auth (sends each request without credentials first, gets a 401, then retries with auth). The fail2ban `caddy-auth` filter only matches 401s where an `Authorization` header was present (wrong credentials), so Dolphin's challenge-response 401s are never counted. Additionally, KIO has a bug with HTTP/2 uploads — files larger than ~500KB may be silently corrupted. Use `rclone copy` for uploading. Dolphin is fine for browsing and downloading.
 
 ## Maintenance
 
