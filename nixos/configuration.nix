@@ -135,7 +135,7 @@ in
         # RetroArch user — restricted to /retroarch/* only.
         # This password is stored in plain text by RetroArch, so treat it
         # as disposable. If compromised, only game saves are exposed.
-        @retroarch_path path /retroarch/*
+        @retroarch_path path /retroarch /retroarch/* /ns /ns/*
         handle @retroarch_path {
             basic_auth {
                 ${secrets.retroarchUser} ${secrets.retroarchPasswordHash}
@@ -146,7 +146,7 @@ in
 
         # DJ user — restricted to /media/* only.
         # Used by the Diffuse music player (https://diffuse.sh) for WebDAV access.
-        @music_path path /media/*
+        @music_path path /media /media/*
         handle @music_path {
             basic_auth {
                 ${secrets.djUser} ${secrets.djPassword}
