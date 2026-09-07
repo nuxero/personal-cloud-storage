@@ -29,8 +29,11 @@ in
   system.stateVersion = secrets.stateVersion;
   networking.hostName = "storage";
 
-  # Limit boot entries to prevent /boot from filling up (EFI partition is only 249MB).
-  boot.loader.systemd-boot.configurationLimit = 2;
+  # Limit boot entries to prevent /boot from filling up (boot partition is only 249MB).
+  # NOTE: The amazon-image.nix profile uses GRUB, not systemd-boot, so the limit
+  # must be set on boot.loader.grub. Each generation keeps its own kernel + initrd
+  # in /boot/kernels, so keep this low.
+  boot.loader.grub.configurationLimit = 2;
 
   # --- Auto-upgrades ---
   system.autoUpgrade = {
@@ -135,7 +138,7 @@ in
         # RetroArch user — restricted to /retroarch/* only.
         # This password is stored in plain text by RetroArch, so treat it
         # as disposable. If compromised, only game saves are exposed.
-        @retroarch_path path /retroarch /retroarch/* /ns /ns/*
+        @retroarch_path path /retroarch /retroarch/* /ns /ns/* /epic /epic/*
         handle @retroarch_path {
             basic_auth {
                 ${secrets.retroarchUser} ${secrets.retroarchPasswordHash}
