@@ -29,17 +29,40 @@ in
   system.stateVersion = secrets.stateVersion;
   networking.hostName = "storage";
 
-  # Limit boot entries to prevent /boot from filling up (boot partition is only 249MB).
-  # NOTE: The amazon-image.nix profile uses GRUB, not systemd-boot, so the limit
-  # must be set on boot.loader.grub. Each generation keeps its own kernel + initrd
-  # in /boot/kernels, so keep this low.
-  boot.loader.grub.configurationLimit = 2;
+  # Limit boot entries to keep /boot from filling up. The amazon-image.nix
+  # profile uses GRUB (not systemd-boot), so the limit must be set on
+  # boot.loader.grub. Each generation keeps its own kernel + initrd in
+  # /boot/kernels (~90MB on arm64).
+  #
+  # This assumes a /boot of at least ~1GB (provisioned via the larger ESP in the
+  # deployment — the stock NixOS AMI's 249MB ESP is too small for multiple arm64
+  # kernels). With ~1GB, keeping the last 3 generations leaves ample headroom,
+  # including the transient 4th-kernel spike during switch-to-configuration,
+  # which writes the new kernel BEFORE pruning old ones (nixpkgs#23926).
+  boot.loader.grub.configurationLimit = 3;
 
   # --- Auto-upgrades ---
+  # Rolling release, weekly (matches desktop cadence). allowReboot lets kernel
+  # upgrades take effect.
+  #
+  # No `channel` override is set on purpose. The custom AMI (see ami/) is built
+  # from nixos-unstable, so root's system channel is ALREADY unstable at first
+  # boot (make-disk-image.nix bakes in pkgs.path as the `nixos` channel). With
+  # no override, autoUpgrade runs `nixos-rebuild switch --upgrade`, which does
+  # `nix-channel --update` on that unstable channel and rebuilds — so automatic
+  # upgrades track unstable. Manual `nixos-rebuild` / `nix-shell` use the same
+  # channel, so there is NO stable/unstable split to patch around.
+  #
+  # (If you ever launch from a STOCK stable AMI instead, either re-point root's
+  # channel once with `nix-channel --add .../nixos-unstable nixos` or set
+  # `channel = "https://channels.nixos.org/nixos-unstable"` here.)
+  #
+  # NOTE: stateVersion (in secrets.nix) stays pinned at its original value and
+  # must NOT be bumped — it is a compatibility marker, not a channel selector.
   system.autoUpgrade = {
     enable = true;
     allowReboot = true;
-    dates = "04:00";
+    dates = "Mon 04:00";
   };
 
   # Garbage-collect old generations daily (keep only last 3 days)

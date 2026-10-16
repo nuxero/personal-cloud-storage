@@ -17,7 +17,7 @@ Personal cloud storage server using S3 + WebDAV, managed declaratively with NixO
                          └────────────────────────────────────┘
 ```
 
-**OS:** NixOS (stable channel) — entire server configuration is declarative and reproducible.
+**OS:** NixOS (unstable/rolling channel) — entire server configuration is declarative and reproducible.
 
 **Cost:** ~$12/month (EC2) + pennies (S3).
 
@@ -55,7 +55,14 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM
 ```
 
-### Finding the NixOS AMI
+### The NixOS AMI — use the custom larger-`/boot` build
+
+> **Important:** launch from the **custom AMI** built via [`ami/`](ami/README.md),
+> not a stock NixOS AMI. The stock image's 256MiB `/boot` is too small for arm64
+> kernels and fills up after a few generations. The custom AMI is identical to
+> stock except `/boot` is 1GiB. Build it once, then reuse its AMI ID.
+
+Stock AMIs (only if you understand the `/boot` limitation):
 
 | Source | Notes |
 |--------|-------|
@@ -126,11 +133,11 @@ ssh -i your-key.pem admin@ELASTIC_IP
 | Hardware failure | CloudWatch auto-recovery (migrates instance) |
 | Instance down 5+ min | Email alert |
 | TLS cert expiry | Caddy auto-renews via built-in ACME client |
-| OS upgrades | NixOS `system.autoUpgrade` (daily at 04:00, auto-reboot) |
+| OS upgrades | NixOS `system.autoUpgrade` (weekly Mon 04:00, nixos-unstable, auto-reboot) |
 | SSH brute force | fail2ban (built-in NixOS sshd jail) |
 | WebDAV brute force | fail2ban (`caddy-auth` jail) |
 | Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
-| Old Nix generations | Garbage-collected weekly (older than 30 days) |
+| Old Nix generations | Garbage-collected daily (older than 3 days); GRUB keeps last 3 boot entries |
 
 ## Configure RetroArch
 
@@ -231,34 +238,34 @@ sudo fail2ban-client set caddy-auth unbanip 1.2.3.4
 
 ### Update NixOS
 
-Happens automatically daily. To force:
+The server tracks **nixos-unstable** (rolling release) and upgrades
+automatically every **Monday at 04:00**, rebooting if the kernel changed, via
+`system.autoUpgrade` in `configuration.nix`.
+
+Because the custom AMI (see [`ami/`](ami/README.md)) is built from
+nixos-unstable, root's system channel is already unstable at first boot. So both
+automatic upgrades and manual rebuilds track unstable with **no extra steps and
+no stable/unstable split** — there's no `channel` override to maintain.
+
+To force an upgrade manually:
 
 ```bash
-sudo nix-channel --update
-sudo nixos-rebuild switch
+sudo nixos-rebuild switch --upgrade
 ```
 
-### Switch to unstable channel
+> If you ever launch from a **stock stable AMI** instead of the custom one,
+> either re-point the channel once (`sudo nix-channel --add
+> https://channels.nixos.org/nixos-unstable nixos && sudo nix-channel --update`)
+> or add `channel = "https://channels.nixos.org/nixos-unstable";` to
+> `system.autoUpgrade`.
 
-Unstable is rolling release — no channel hops every 6 months. Trade-off is a small risk of occasional breakage (mitigated by NixOS rollback).
+Rolling release means no 6-month channel hops. Trade-off is a small risk of
+occasional breakage, mitigated by NixOS rollback (and the weekly cadence lets
+you catch issues without being on the bleeding edge daily).
 
-```bash
-sudo nix-channel --add https://nixos.org/channels/nixos-unstable nixos
-sudo nix-channel --update
-sudo nixos-rebuild switch
-```
-
-### Upgrade to a new stable release
-
-When a new stable release comes out (e.g., 26.11), point the channel to it:
-
-```bash
-sudo nix-channel --add https://nixos.org/channels/nixos-26.11 nixos
-sudo nix-channel --update
-sudo nixos-rebuild switch
-```
-
-No reinstall or new AMI needed. `system.stateVersion` in `secrets.nix` stays unchanged — it always reflects the version used at *initial* deployment.
+`system.stateVersion` in `secrets.nix` stays unchanged regardless of upgrades —
+it always reflects the version used at *initial* deployment and is a
+compatibility marker, not a channel selector.
 
 ## File structure
 
@@ -268,6 +275,10 @@ No reinstall or new AMI needed. `system.stateVersion` in `secrets.nix` stays unc
 ├── nixos/
 │   ├── configuration.nix      # Full NixOS system config (→ /etc/nixos/)
 │   └── secrets.nix.example    # Template for machine-specific secrets
+├── ami/                       # Custom AMI with larger /boot (see ami/README.md)
+│   ├── image.nix              # Nix expression for the aarch64 amazon image
+│   ├── build.sh               # Build VHD → import snapshot → register AMI
+│   └── setup-vmimport-role.sh # One-time vmimport IAM role setup
 └── README.md
 ```
 
