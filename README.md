@@ -136,7 +136,7 @@ ssh -i your-key.pem admin@ELASTIC_IP
 | OS upgrades | NixOS `system.autoUpgrade` (weekly Mon 04:00, nixos-unstable, auto-reboot) |
 | SSH brute force | fail2ban (built-in NixOS sshd jail) |
 | WebDAV brute force | fail2ban (`caddy-auth` jail) |
-| Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
+| Vulnerability scanning | Not needed: all paths require basic auth, so unauthenticated probes only get 401 (and wrong credentials are caught by `caddy-auth`) |
 | Old Nix generations | Garbage-collected daily (older than 3 days); GRUB keeps last 3 boot entries |
 
 ## Configure RetroArch
