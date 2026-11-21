@@ -168,6 +168,12 @@ Resources:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyPairName
+      # Require IMDSv2 (session tokens) so credentials for the instance role
+      # can't be read with a plain GET (e.g. via SSRF). The NixOS metadata
+      # fetcher requests IMDSv2 tokens, and rclone uses the AWS SDK for Go v2.
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
       IamInstanceProfile: !Ref InstanceProfile
       SecurityGroups:
         - !Ref SecurityGroup
