@@ -91,31 +91,17 @@ in
   # The instance role needs AmazonSSMManagedInstanceCore (see template.yaml).
   services.amazon-ssm-agent.enable = true;
 
-  # --- SSH (break-glass only) ---
-  # The EC2 security group keeps port 22 closed unless the stack is deployed
-  # with the SshCidr parameter. sshd stays enabled (key-only) so SSH can be
-  # re-opened from CloudFormation if the SSM agent ever breaks after an
-  # unattended upgrade. Port 22 stays allowed in the host firewall below so the
-  # security group is the single switch.
-  services.openssh = {
-    enable = true;
-    settings = {
-      PasswordAuthentication = false;
-    };
-  };
-
-  # --- User ---
-  users.users.admin = {
-    isNormalUser = true;
-    extraGroups = [ "wheel" ];
-    openssh.authorizedKeys.keys = secrets.sshPublicKeys;
-  };
-  security.sudo.wheelNeedsPassword = false;
+  # --- SSH: disabled ---
+  # Access is through SSM only. amazon-image.nix enables sshd by default, so it
+  # must be forced off here. There is no other login user: Session Manager
+  # sessions run as `ssm-user`. State lives in S3, so if the agent ever breaks
+  # the recovery path is to replace the instance (see README).
+  services.openssh.enable = lib.mkForce false;
 
   # --- Firewall ---
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 80 443 22 ];
+    allowedTCPPorts = [ 80 443 ];
   };
 
   # --- rclone WebDAV service ---

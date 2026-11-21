@@ -8,8 +8,9 @@ briefly needing room for one extra. That ESP is baked into the image and cannot
 be grown by relaunching (`boot.growPartition` only grows root).
 
 This directory builds a drop-in replacement AMI identical to stock **except the
-ESP is 1GiB**. Your deployment flow (scp `configuration.nix` + `nixos-rebuild
-switch`) is unchanged — you just launch from this AMI instead.
+ESP is 1GiB**, plus the SSM agent so you can log in with Session Manager (the
+stack has no SSH). The deployment flow (install `configuration.nix` +
+`nixos-rebuild switch`) is otherwise unchanged — you launch from this AMI.
 
 ## Files
 
@@ -89,7 +90,7 @@ aws cloudformation deploy \
 Then follow the normal server setup in the top-level README (open a Session
 Manager session, install `configuration.nix`, create `secrets.nix`,
 `nixos-rebuild switch`). This AMI includes the SSM agent, so no SSH or key pair
-is needed. Because the
+is needed (the stack has neither). Because the
 instance is stateless (all data in S3) and the Elastic IP re-associates, this is
 a safe replace.
 

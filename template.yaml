@@ -3,25 +3,10 @@ Description: >
   RetroArch Cloud Saves — EC2 infrastructure with S3, auto-recovery, and alerting.
 
 Parameters:
-  KeyPairName:
-    Type: String
-    Default: ''
-    Description: >
-      Optional EC2 key pair, only needed for SSH break-glass access. Leave empty
-      to launch without one. NOTE: changing this on an existing stack replaces
-      the instance, so keep the current value when updating a running stack.
-
   AlertEmail:
     Type: String
     Default: ''
     Description: Email for alarm notifications (leave empty to skip)
-
-  SshCidr:
-    Type: String
-    Default: ''
-    Description: >
-      Optional CIDR allowed to SSH (e.g. YOUR_IP/32). Leave empty to keep port
-      22 closed; use AWS Systems Manager Session Manager instead.
 
   InstanceType:
     Type: String
@@ -40,8 +25,6 @@ Parameters:
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
-  HasKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
-  HasSshCidr: !Not [!Equals [!Ref SshCidr, '']]
 
 Resources:
   # --- S3 ---
@@ -110,7 +93,7 @@ Resources:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
       # Lets the SSM agent register the instance and open Session Manager
-      # sessions (replaces SSH for interactive access).
+      # sessions. There is no SSH access: port 22 is not opened.
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
@@ -150,15 +133,6 @@ Resources:
           ToPort: 80
           CidrIp: '0.0.0.0/0'
           Description: HTTP for ACME certificate challenges
-        # SSH is closed unless SshCidr is set. Use Session Manager by default.
-        - !If
-          - HasSshCidr
-          - IpProtocol: tcp
-            FromPort: 22
-            ToPort: 22
-            CidrIp: !Ref SshCidr
-            Description: SSH break-glass access
-          - !Ref 'AWS::NoValue'
       Tags:
         - Key: Name
           Value: retroarch-webdav
@@ -183,7 +157,6 @@ Resources:
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
-      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
       # Require IMDSv2 (session tokens). The NixOS metadata fetcher, the SSM
       # agent and rclone (AWS SDK for Go v2) all support it.
       MetadataOptions:
@@ -268,11 +241,6 @@ Outputs:
   SsmCommand:
     Description: Open an interactive shell via Session Manager (no SSH needed)
     Value: !Sub 'aws ssm start-session --target ${Instance} --region ${AWS::Region}'
-
-  SshCommand:
-    Condition: HasSshCidr
-    Description: SSH break-glass access (NixOS uses 'root' on first boot with EC2 key pair)
-    Value: !Sub 'ssh -i ${KeyPairName}.pem root@${ElasticIp}'
 
   SetupCommand:
     Description: After first login, install configuration.nix and secrets.nix then run nixos-rebuild switch

@@ -53,18 +53,14 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM
 ```
 
-Port 22 is **closed** by default. You get a shell through
-[AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html)
-instead, which needs no inbound ports. On your machine, install the
+There is no SSH access: port 22 is not opened, sshd is disabled, and the stack
+has no key pair. You get a shell through
+[AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html),
+which needs no inbound ports. On your machine, install the
 [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
 for the AWS CLI. The IAM user or role that runs `aws ssm start-session` needs
 `ssm:StartSession` on the instance. Sessions run as `ssm-user` with passwordless
 sudo, so treat that permission as root access and protect it with MFA.
-
-Optional parameters (SSH break-glass, see [Recovery](#recovery)):
-`SshCidr=YOUR_IP/32` opens port 22, and `KeyPairName=your-key` attaches a key
-pair. **Changing `KeyPairName` on an existing stack replaces the instance**, so
-keep whatever value the stack already has.
 
 ### The NixOS AMI — use the custom larger-`/boot` build
 
@@ -73,7 +69,8 @@ keep whatever value the stack already has.
 > kernels and fills up after a few generations. The custom AMI is identical to
 > stock except `/boot` is 1GiB. Build it once, then reuse its AMI ID.
 
-Stock AMIs (only if you understand the `/boot` limitation):
+Stock AMIs (only if you understand the `/boot` limitation, and note they do **not**
+include the SSM agent, so with SSH removed you would have no way to log in):
 
 | Source | Notes |
 |--------|-------|
@@ -93,14 +90,17 @@ aws ssm start-session --target "$INSTANCE_ID"
 sudo -i
 ```
 
-Install the configuration on the server:
+Clone the repo (it is public) and install the configuration. The AMI may not
+ship `git`, so use `nix-shell`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nuxero/personal-cloud-storage/main/nixos/configuration.nix \
-  -o /etc/nixos/configuration.nix
+nix-shell -p git --run 'git clone https://github.com/nuxero/personal-cloud-storage.git /root/personal-cloud-storage'
+cp /root/personal-cloud-storage/nixos/configuration.nix /etc/nixos/configuration.nix
 ```
 
-(Using a fork or a local edit? Paste the file with a heredoc instead.)
+`configuration.nix` runs as root, so review what you pull. Pin a reviewed
+commit with `git -C /root/personal-cloud-storage checkout <commit>` if you want
+changes to be deliberate. `secrets.nix` is never in git: you create it below.
 
 Create the secrets file on the server:
 
@@ -117,9 +117,6 @@ cat > /etc/nixos/secrets.nix << 'EOF'
   djPassword = "PASTE_HASH_HERE";
   adminUser = "myuser";
   adminPasswordHash = "PASTE_HASH_HERE";
-  sshPublicKeys = [
-    "ssh-ed25519 AAAAC3... your-key"
-  ];
 }
 EOF
 ```
@@ -142,28 +139,26 @@ future upgrades.
 
 ### Moving an existing stack from SSH to Session Manager
 
-1. Update the stack, keeping your current `KeyPairName` and `SshCidr`. This
-   attaches `AmazonSSMManagedInstanceCore` and enforces IMDSv2, both without
-   interrupting the instance.
-2. Copy the new `configuration.nix` to the server and run `nixos-rebuild switch`
-   (this enables `services.amazon-ssm-agent`).
-3. Check the instance is registered and a session opens:
-   ```bash
-   aws ssm describe-instance-information --query 'InstanceInformationList[].[InstanceId,PingStatus]'
-   aws ssm start-session --target "$INSTANCE_ID"
-   ```
-4. Check S3 access still works under IMDSv2: `systemctl status rclone-webdav`
-   and load `https://storage.yourdomain.com/retroarch/` from a client.
-5. Close SSH by re-deploying with `SshCidr=''` (keep `KeyPairName` unchanged).
+The stack no longer has `KeyPairName` or `SshCidr`, so removing the key pair
+**replaces the instance**. That is safe because all data is in S3 and the
+Elastic IP re-associates, but you redo the server setup on the new instance.
+
+1. Build the new AMI with [`ami/`](ami/README.md) (it includes the SSM agent).
+2. Re-deploy with the new `LatestAmiId`, and drop `KeyPairName` and `SshCidr`
+   from `--parameter-overrides` (CloudFormation rejects parameters that no
+   longer exist).
+3. Open a session and redo "Configure the server" above, reusing your saved
+   `secrets.nix` (the leftover `sshPublicKeys` entry is ignored).
+4. Check S3 access under IMDSv2: `systemctl status rclone-webdav`, then load
+   `https://storage.yourdomain.com/retroarch/` from a client.
+5. Check SSM registration: `aws ssm describe-instance-information`.
 
 ### Recovery
 
-All state lives in S3 and the Elastic IP re-associates, so the instance is
-disposable. If an unattended upgrade ever breaks the SSM agent or networking:
-
-- Re-open SSH temporarily: re-deploy with `SshCidr=YOUR_IP/32` (requires the
-  stack to have a `KeyPairName`), fix the config, then close it again.
-- Or launch a fresh instance from the AMI and redo the server setup above.
+With no SSH, the recovery path for a broken instance (for example an unattended
+upgrade that breaks the SSM agent or networking) is to replace it: re-deploy
+with the same AMI or a freshly built one and redo the server setup. All state
+lives in S3, so nothing is lost.
 
 ## What stays running
 
@@ -174,7 +169,7 @@ disposable. If an unattended upgrade ever breaks the SSM agent or networking:
 | Instance down 5+ min | Email alert |
 | TLS cert expiry | Caddy auto-renews via built-in ACME client |
 | OS upgrades | NixOS `system.autoUpgrade` (weekly Mon 04:00, nixos-unstable, auto-reboot) |
-| Remote shell access | Port 22 closed in the security group. Access via SSM Session Manager (IAM-authenticated, outbound-only). sshd stays key-only as break-glass, and the NixOS sshd jail remains enabled. |
+| Remote shell access | No SSH: sshd disabled, port 22 closed. Access via SSM Session Manager (IAM-authenticated, outbound-only). |
 | Instance credential theft | IMDSv2 required (`HttpTokens: required`) |
 | WebDAV brute force | fail2ban (`caddy-auth` jail) |
 | Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
