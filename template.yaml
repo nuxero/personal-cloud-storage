@@ -12,10 +12,29 @@ Parameters:
     Default: ''
     Description: Email for alarm notifications (leave empty to skip)
 
-  SshCidr:
+  TrustedCidr1:
     Type: String
-    Default: '0.0.0.0/0'
-    Description: CIDR block allowed to SSH (recommend your IP/32)
+    Default: ''
+    AllowedPattern: '^$|^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$'
+    ConstraintDescription: Must be empty or an IPv4 CIDR such as 203.0.113.7/32
+    Description: >
+      Trusted IPv4 CIDR (e.g. YOUR_IP/32). Allowed to SSH, and should also be listed in secrets.nix as trustedCidrs so fail2ban never bans it. Leave empty to keep port 22 closed.
+
+  TrustedCidr2:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$'
+    ConstraintDescription: Must be empty or an IPv4 CIDR such as 203.0.113.7/32
+    Description: >
+      Optional additional trusted IPv4 CIDR (same rules as TrustedCidr1).
+
+  TrustedCidr3:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$'
+    ConstraintDescription: Must be empty or an IPv4 CIDR such as 203.0.113.7/32
+    Description: >
+      Optional additional trusted IPv4 CIDR (same rules as TrustedCidr1).
 
   InstanceType:
     Type: String
@@ -34,6 +53,9 @@ Parameters:
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  HasTrustedCidr1: !Not [!Equals [!Ref TrustedCidr1, '']]
+  HasTrustedCidr2: !Not [!Equals [!Ref TrustedCidr2, '']]
+  HasTrustedCidr3: !Not [!Equals [!Ref TrustedCidr3, '']]
 
 Resources:
   # --- S3 ---
@@ -138,11 +160,30 @@ Resources:
           ToPort: 80
           CidrIp: '0.0.0.0/0'
           Description: HTTP for ACME certificate challenges
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !Ref SshCidr
-          Description: SSH access
+        - !If
+          - HasTrustedCidr1
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref TrustedCidr1
+            Description: SSH from trusted CIDR 1
+          - !Ref 'AWS::NoValue'
+        - !If
+          - HasTrustedCidr2
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref TrustedCidr2
+            Description: SSH from trusted CIDR 2
+          - !Ref 'AWS::NoValue'
+        - !If
+          - HasTrustedCidr3
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref TrustedCidr3
+            Description: SSH from trusted CIDR 3
+          - !Ref 'AWS::NoValue'
       Tags:
         - Key: Name
           Value: retroarch-webdav

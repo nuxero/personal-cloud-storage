@@ -83,7 +83,7 @@ aws cloudformation deploy \
   --stack-name cloud-storage \
   --parameter-overrides \
     KeyPairName=your-key \
-    SshCidr=YOUR_IP/32 \
+    TrustedCidr1=YOUR_IP/32 \
     LatestAmiId=ami-NEWID \
   --capabilities CAPABILITY_IAM
 ```

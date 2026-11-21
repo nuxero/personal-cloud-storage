@@ -202,9 +202,10 @@ in
     enable = true;
     maxretry = 5;
     bantime = "1h";
-    # Never ban these addresses/CIDRs (e.g. home IP, VPN range). Optional:
-    # set `fail2banIgnoreIPs = [ "203.0.113.7" ];` in secrets.nix.
-    ignoreIP = secrets.fail2banIgnoreIPs or [ ];
+    # Never ban these addresses/CIDRs. Keep this in sync with the
+    # TrustedCidr1..3 stack parameters (which control who may reach SSH).
+    # Optional: set `trustedCidrs = [ "203.0.113.7/32" ];` in secrets.nix.
+    ignoreIP = secrets.trustedCidrs or [ ];
     bantime-increment = {
       enable = true;
       multipliers = "1 2 4 8 16 32 64";

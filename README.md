@@ -49,11 +49,29 @@ aws cloudformation deploy \
   --stack-name cloud-storage \
   --parameter-overrides \
     KeyPairName=your-key \
-    SshCidr=YOUR_IP/32 \
+    TrustedCidr1=YOUR_IP/32 \
     AlertEmail=you@example.com \
     LatestAmiId=ami-XXXXXXXXXXXXXXXXX \
   --capabilities CAPABILITY_IAM
 ```
+
+#### Trusted IPs (SSH and fail2ban)
+
+`TrustedCidr1` to `TrustedCidr3` are optional IPv4 CIDRs (for example your home
+IP as `203.0.113.7/32`, or a VPN range). They control two things:
+
+- **SSH:** port 22 is only open to these CIDRs. With none set, port 22 is closed.
+- **fail2ban:** these addresses should never be banned.
+
+The security group is managed by CloudFormation and fail2ban by NixOS, so the
+list lives in two places. Put the same CIDRs in `secrets.nix` as `trustedCidrs`
+(see `nixos/secrets.nix.example`) and update both when your address changes. A
+stale entry whitelists whoever gets that IP next, so prefer a fixed VPN or
+bastion range over a dynamic home IP.
+
+> Upgrading from an older stack: the `SshCidr` parameter was replaced by
+> `TrustedCidr1..3`, and the default is now closed instead of `0.0.0.0/0`.
+> Pass `TrustedCidr1=YOUR_IP/32` to keep SSH reachable.
 
 ### The NixOS AMI — use the custom larger-`/boot` build
 
