@@ -82,14 +82,14 @@ aws cloudformation deploy \
   --template-file template.yaml \
   --stack-name cloud-storage \
   --parameter-overrides \
-    KeyPairName=your-key \
-    SshCidr=YOUR_IP/32 \
     LatestAmiId=ami-NEWID \
   --capabilities CAPABILITY_IAM
 ```
 
-Then follow the normal server setup in the top-level README (scp
-`configuration.nix`, create `secrets.nix`, `nixos-rebuild switch`). Because the
+Then follow the normal server setup in the top-level README (open a Session
+Manager session, install `configuration.nix`, create `secrets.nix`,
+`nixos-rebuild switch`). This AMI includes the SSM agent, so no SSH or key pair
+is needed. Because the
 instance is stateless (all data in S3) and the Elastic IP re-associates, this is
 a safe replace.
 
@@ -101,7 +101,8 @@ the registered AMI + its snapshot are what you keep.
 ## Verifying `/boot` size after deploy
 
 ```bash
-ssh -i your-key.pem admin@ELASTIC_IP 'df -h /boot'
+aws ssm start-session --target INSTANCE_ID --document-name AWS-StartInteractiveCommand \
+  --parameters command='df -h /boot'
 # Filesystem  Size  Used Avail Use% Mounted on
 # /dev/nvme0n1p1  ~1016M  ...        /boot
 ```

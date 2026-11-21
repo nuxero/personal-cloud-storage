@@ -83,7 +83,20 @@ in
     curl
   ];
 
-  # --- SSH ---
+  # --- AWS Systems Manager Session Manager (primary interactive access) ---
+  # The agent opens an outbound connection to SSM, so no inbound port is needed.
+  # The NixOS module also declares the `ssm-user` account that sessions run as
+  # (with passwordless sudo). Anyone allowed to ssm:StartSession on this
+  # instance therefore has root, so protect that IAM identity with MFA.
+  # The instance role needs AmazonSSMManagedInstanceCore (see template.yaml).
+  services.amazon-ssm-agent.enable = true;
+
+  # --- SSH (break-glass only) ---
+  # The EC2 security group keeps port 22 closed unless the stack is deployed
+  # with the SshCidr parameter. sshd stays enabled (key-only) so SSH can be
+  # re-opened from CloudFormation if the SSM agent ever breaks after an
+  # unattended upgrade. Port 22 stays allowed in the host firewall below so the
+  # security group is the single switch.
   services.openssh = {
     enable = true;
     settings = {

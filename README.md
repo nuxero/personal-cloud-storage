@@ -48,12 +48,23 @@ aws cloudformation deploy \
   --template-file template.yaml \
   --stack-name cloud-storage \
   --parameter-overrides \
-    KeyPairName=your-key \
-    SshCidr=YOUR_IP/32 \
     AlertEmail=you@example.com \
     LatestAmiId=ami-XXXXXXXXXXXXXXXXX \
   --capabilities CAPABILITY_IAM
 ```
+
+Port 22 is **closed** by default. You get a shell through
+[AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html)
+instead, which needs no inbound ports. On your machine, install the
+[Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+for the AWS CLI. The IAM user or role that runs `aws ssm start-session` needs
+`ssm:StartSession` on the instance. Sessions run as `ssm-user` with passwordless
+sudo, so treat that permission as root access and protect it with MFA.
+
+Optional parameters (SSH break-glass, see [Recovery](#recovery)):
+`SshCidr=YOUR_IP/32` opens port 22, and `KeyPairName=your-key` attaches a key
+pair. **Changing `KeyPairName` on an existing stack replaces the instance**, so
+keep whatever value the stack already has.
 
 ### The NixOS AMI — use the custom larger-`/boot` build
 
@@ -72,18 +83,24 @@ Stock AMIs (only if you understand the `/boot` limitation):
 
 ### Configure the server
 
-SSH in (NixOS AMIs use `root` with the EC2 key pair on first boot):
+Open a session (the custom AMI includes the SSM agent, so the instance shows up
+in Systems Manager shortly after launch; check with `aws ssm describe-instance-information`):
 
 ```bash
-ssh -i your-key.pem root@ELASTIC_IP
+INSTANCE_ID=$(aws cloudformation describe-stack-resource --stack-name cloud-storage \
+  --logical-resource-id Instance --query StackResourceDetail.PhysicalResourceId --output text)
+aws ssm start-session --target "$INSTANCE_ID"
+sudo -i
 ```
 
-Copy the configuration:
+Install the configuration on the server:
 
 ```bash
-# From your local machine:
-scp -i your-key.pem nixos/configuration.nix root@ELASTIC_IP:/etc/nixos/configuration.nix
+curl -fsSL https://raw.githubusercontent.com/nuxero/personal-cloud-storage/main/nixos/configuration.nix \
+  -o /etc/nixos/configuration.nix
 ```
+
+(Using a fork or a local edit? Paste the file with a heredoc instead.)
 
 Create the secrets file on the server:
 
@@ -119,11 +136,34 @@ Apply everything:
 nixos-rebuild switch
 ```
 
-From now on, SSH as `admin` (root login is disabled after the first rebuild):
+From now on, keep using `aws ssm start-session --target "$INSTANCE_ID"`. The
+rebuild also enables the SSM agent on the server itself, so access survives
+future upgrades.
 
-```bash
-ssh -i your-key.pem admin@ELASTIC_IP
-```
+### Moving an existing stack from SSH to Session Manager
+
+1. Update the stack, keeping your current `KeyPairName` and `SshCidr`. This
+   attaches `AmazonSSMManagedInstanceCore` and enforces IMDSv2, both without
+   interrupting the instance.
+2. Copy the new `configuration.nix` to the server and run `nixos-rebuild switch`
+   (this enables `services.amazon-ssm-agent`).
+3. Check the instance is registered and a session opens:
+   ```bash
+   aws ssm describe-instance-information --query 'InstanceInformationList[].[InstanceId,PingStatus]'
+   aws ssm start-session --target "$INSTANCE_ID"
+   ```
+4. Check S3 access still works under IMDSv2: `systemctl status rclone-webdav`
+   and load `https://storage.yourdomain.com/retroarch/` from a client.
+5. Close SSH by re-deploying with `SshCidr=''` (keep `KeyPairName` unchanged).
+
+### Recovery
+
+All state lives in S3 and the Elastic IP re-associates, so the instance is
+disposable. If an unattended upgrade ever breaks the SSM agent or networking:
+
+- Re-open SSH temporarily: re-deploy with `SshCidr=YOUR_IP/32` (requires the
+  stack to have a `KeyPairName`), fix the config, then close it again.
+- Or launch a fresh instance from the AMI and redo the server setup above.
 
 ## What stays running
 
@@ -134,7 +174,8 @@ ssh -i your-key.pem admin@ELASTIC_IP
 | Instance down 5+ min | Email alert |
 | TLS cert expiry | Caddy auto-renews via built-in ACME client |
 | OS upgrades | NixOS `system.autoUpgrade` (weekly Mon 04:00, nixos-unstable, auto-reboot) |
-| SSH brute force | fail2ban (built-in NixOS sshd jail) |
+| Remote shell access | Port 22 closed in the security group. Access via SSM Session Manager (IAM-authenticated, outbound-only). sshd stays key-only as break-glass, and the NixOS sshd jail remains enabled. |
+| Instance credential theft | IMDSv2 required (`HttpTokens: required`) |
 | WebDAV brute force | fail2ban (`caddy-auth` jail) |
 | Vulnerability scanning | fail2ban (`caddy-botscan` jail) |
 | Old Nix generations | Garbage-collected daily (older than 3 days); GRUB keeps last 3 boot entries |

@@ -47,6 +47,12 @@ let
         # EFI boot (arm64 EC2 uses UEFI).
         ec2.efi = true;
 
+        # Bake in the SSM agent so a fresh instance registers with Systems
+        # Manager on first boot. This lets you bootstrap the server through
+        # Session Manager with port 22 closed. (Needs the instance role to
+        # include AmazonSSMManagedInstanceCore, which template.yaml attaches.)
+        services.amazon-ssm-agent.enable = true;
+
         # Enlarge the ESP. The amazon image's build derivation is defined in
         # nixos/maintainers/scripts/ec2/amazon-image.nix, which for the ext4
         # (non-ZFS) path calls make-disk-image.nix with partitionTableType
