@@ -202,6 +202,9 @@ in
     enable = true;
     maxretry = 5;
     bantime = "1h";
+    # Never ban these addresses/CIDRs (e.g. home IP, VPN range). Optional:
+    # set `fail2banIgnoreIPs = [ "203.0.113.7" ];` in secrets.nix.
+    ignoreIP = secrets.fail2banIgnoreIPs or [ ];
     bantime-increment = {
       enable = true;
       multipliers = "1 2 4 8 16 32 64";
@@ -225,17 +228,13 @@ in
         findtime = 300;
         bantime = 3600;
       };
-      # Caddy path scanning / vulnerability probes (404 floods in access log)
-      caddy-botscan.settings = {
-        enabled = true;
-        port = "http,https";
-        filter = "caddy-botscan";
-        logpath = "/var/log/caddy/access-*.log";
-        backend = "auto";
-        maxretry = 15;
-        findtime = 300;
-        bantime = 3600;
-      };
+      #
+      # There is intentionally no 404 "botscan" jail. Every path except CORS
+      # preflight OPTIONS is behind basic_auth, so unauthenticated scanners get
+      # 401 and never reach a 404. A 404 in the log therefore always comes from
+      # an authenticated WebDAV client (existence checks before MOVE/COPY/PUT,
+      # probes for .DS_Store, desktop.ini, etc.), and banning on it locks out
+      # legitimate users during renames and bulk copies.
     };
   };
 
@@ -250,12 +249,6 @@ in
     "fail2ban/filter.d/caddy-auth.local".text = ''
       [Definition]
       failregex = "remote_ip":"<HOST>".*"Authorization":\["REDACTED"\].*"status":401
-      datepattern = "ts":{Epoch}
-      ignoreregex =
-    '';
-    "fail2ban/filter.d/caddy-botscan.local".text = ''
-      [Definition]
-      failregex = "remote_ip":"<HOST>".*"status":404
       datepattern = "ts":{Epoch}
       ignoreregex =
     '';
