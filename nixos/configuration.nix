@@ -122,8 +122,12 @@ in
         "--vfs-cache-mode minimal"
         "--vfs-cache-max-age 1h"
         "--cache-dir /var/cache/rclone"
-        "--server-read-timeout 5m"
-        "--server-write-timeout 5m"
+        # These are absolute limits on a whole transfer (they do not reset as
+        # data moves), so they must exceed the longest legitimate upload or
+        # download. rclone only listens on localhost behind Caddy, which
+        # enforces idle timeouts on real clients, so a high ceiling is safe.
+        "--server-read-timeout 12h"
+        "--server-write-timeout 12h"
       ];
       Restart = "always";
       RestartSec = 5;
