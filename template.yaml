@@ -80,6 +80,14 @@ Resources:
             Status: Enabled
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
+          # Remove delete markers that no longer hide any version. Deleting a
+          # file adds a delete marker; the noncurrent-version rules above
+          # eventually delete the old data, but not the marker itself. This
+          # must be its own rule (it can't be combined with expiration days or
+          # tag filters). No prefix: applies to the whole bucket.
+          - Id: remove-expired-delete-markers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
