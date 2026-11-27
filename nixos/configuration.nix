@@ -145,6 +145,30 @@ in
   # --- Caddy (TLS + authentication + reverse proxy) ---
   services.caddy = {
     enable = true;
+
+    # Explicit server timeouts (Caddy 2.11.6+ applies 1m idle defaults; setting
+    # them here keeps the behavior visible and independent of version defaults).
+    # Idle timeouts reset on every successful read/write, so large transfers are
+    # fine as long as they keep making progress. No absolute `read_body` or
+    # `write` limit is set, so big uploads/downloads are never cut off by total
+    # duration. Nothing here uses `min_rate`.
+    #   read_header    - slow-header clients (slowloris) are dropped quickly
+    #   read_body_idle - upload stalls; generous because Caddy only reads the
+    #                    body as fast as rclone/S3 consume it
+    #   write_idle     - download stalls; generous so paused media players
+    #                    (Diffuse) and slow S3 reads are not aborted
+    #   idle           - keep-alive wait between requests
+    globalConfig = ''
+      servers {
+        timeouts {
+          read_header    30s
+          read_body_idle 5m
+          write_idle     5m
+          idle           5m
+        }
+      }
+    '';
+
     virtualHosts.${secrets.domain} = {
       extraConfig = ''
         # --- CORS for Diffuse music player (https://diffuse.sh) ---
