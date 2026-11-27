@@ -59,6 +59,13 @@ Resources:
             Prefix: ns/
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
+          # Epic saves — same behavior as RetroArch (the RetroArch user can
+          # write to /epic, see configuration.nix)
+          - Id: epic-version-expiry
+            Status: Enabled
+            Prefix: epic/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
           # Media — actively accessed, keep 30 days of old versions
           - Id: media-version-expiry
             Status: Enabled
